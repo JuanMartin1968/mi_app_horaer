@@ -16,12 +16,24 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Inicialización de Supabase
+# Inicialización de Supabase con soporte para Nube
 @st.cache_resource
 def get_supabase():
+    # Intentar obtener de variables de entorno (Local)
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
     service_key = os.getenv("SUPABASE_SERVICE_KEY")
+    
+    # Si no están en el sistema (Nube), intentar con st.secrets
+    if not url:
+        try:
+            url = st.secrets["SUPABASE_URL"]
+            key = st.secrets["SUPABASE_KEY"]
+            service_key = st.secrets["SUPABASE_SERVICE_KEY"]
+        except:
+            st.error("❌ Error: No se configuraron las llaves de Supabase. Revisa la Guía de Despliegue.")
+            st.stop()
+            
     # Para el administrador usamos service_key para gestionar usuarios, si no, anon key
     return create_client(url, service_key if service_key else key)
 
