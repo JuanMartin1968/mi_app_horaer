@@ -39,6 +39,9 @@ def get_supabase():
             st.stop()
             
     # Para el administrador usamos service_key para gestionar usuarios, si no, anon key
+    if not service_key:
+        st.warning("⚠️ Nota: 'SUPABASE_SERVICE_KEY' no detectada. No podrá crear usuarios nuevos.")
+    
     return create_client(url, service_key if service_key else key)
 
 supabase = get_supabase()
@@ -546,7 +549,7 @@ else:
                             # Intentar creación administrativa
                             # El cliente 'supabase' ya fue inicializado con el service_key por defecto en get_supabase() si estaba disponible
                             new_u = supabase.auth.admin.create_user({
-                                "email": u_email, "password": u_pass, "email_confirm": True
+                                "email": u_email.strip(), "password": u_pass, "email_confirm": True
                             })
                             supabase.table("profiles").insert({
                                 "id": new_u.user.id, 
@@ -735,7 +738,7 @@ else:
                                     )
                                     
                                     total_proj = sub['Total_Monto'].sum()
-                                    st.markdown(f"<p style='text-align: right; font-weight: bold; font-size: 1.2em;'>Total Proyecto: {curr} {total_proj:,.2f}</p>", unsafe_allow_value=True)
+                                    st.markdown(f"<p style='text-align: right; font-weight: bold; font-size: 1.2em; color: black;'>Total Proyecto: {curr} {total_proj:,.2f}</p>", unsafe_allow_html=True)
 
                                 st.markdown(f"""
                                 <div style="margin-top: 40px;">
@@ -745,7 +748,7 @@ else:
                                     <p style="border-top: 1px solid black; width: 250px; text-align: center;">{firma}<br>Responsable</p>
                                 </div>
                                 </div>
-                                """, unsafe_allow_value=True)
+                                """, unsafe_allow_html=True)
 
                             with tab2:
                                 st.subheader("Resumen Consolidado por Usuario")
