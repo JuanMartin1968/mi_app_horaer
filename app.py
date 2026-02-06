@@ -728,10 +728,10 @@ else:
                                     resumen_tab.columns = ['Fecha', 'Descripción', 'Tiempo (hh:mm)', 'Subtotal']
                                     
                                     # Configuración para tabla de carta
+                                    # Configuración para tabla de carta
                                     st.dataframe(
                                         resumen_tab,
                                         column_config={
-                                            "Horas": st.column_config.NumberColumn(format="%.2f"),
                                             "Subtotal": st.column_config.NumberColumn(format=f"{curr} %.2f")
                                         },
                                         use_container_width=True, hide_index=True
@@ -741,11 +741,11 @@ else:
                                     st.markdown(f"<p style='text-align: right; font-weight: bold; font-size: 1.2em; color: black;'>Total Proyecto: {curr} {total_proj:,.2f}</p>", unsafe_allow_html=True)
 
                                 st.markdown(f"""
-                                <div style="margin-top: 40px;">
+                                <div style="margin-top: 40px; color: black;">
                                     <p><strong>Condiciones de Pago:</strong></p>
-                                    <pre style="background: none; border: none; font-family: inherit;">{cuentas}</pre>
+                                    <pre style="background: none; border: none; font-family: inherit; white-space: pre-wrap; color: black;">{cuentas}</pre>
                                     <br><br>
-                                    <p style="border-top: 1px solid black; width: 250px; text-align: center;">{firma}<br>Responsable</p>
+                                    <p style="border-top: 1px solid black; width: 250px; text-align: center; color: black;">{firma}<br>Responsable</p>
                                 </div>
                                 </div>
                                 """, unsafe_allow_html=True)
