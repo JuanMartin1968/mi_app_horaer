@@ -225,12 +225,10 @@ def mostrar_registro_tiempos():
                 total_sec = st.session_state.total_elapsed + (t_now - t_start).total_seconds()
                 total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
                 
-                # Manejo de zonas horarias para el cronómetro (now es local, t_start es local)
                 tz_local = timezone(timedelta(hours=-5))
                 start_dt = datetime.combine(fecha_sel, t_start.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
                 end_dt = datetime.combine(fecha_sel, t_now.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
                 
-                # Si el tiempo es el mismo en minutos (menor a 60s), forzar al menos 1 minuto de diferencia en el fin
                 if total_min == 1 and start_dt.strftime('%H:%M') == end_dt.strftime('%H:%M'):
                     end_dt = start_dt + timedelta(minutes=1)
                 
@@ -278,20 +276,24 @@ def mostrar_registro_tiempos():
     
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
+        # Formatear horas forzando zona horaria local de Lima/Bogotá (UTC-5)
+        # 1. Asegurar que start_time sea procesado como UTC
+        df['dt_start'] = pd.to_datetime(df['start_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
+        df['dt_end'] = pd.to_datetime(df['end_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
         
-        # Extraer nombres de clientes y proyectos de forma segura para evitar NaN
+        # 2. Formatear a string (NaT se vuelve NaN)
+        df['Inicio'] = df['dt_start'].dt.strftime('%H:%M')
+        df['Fin'] = df['dt_end'].dt.strftime('%H:%M')
+        df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y')
+        df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
+        
+        # 3. Llenar huecos con fallback absoluto
         df['Cliente'] = df['projects.clients.name'].fillna('Desconocido')
         df['Proyecto'] = df['projects.name'].fillna('Desconocido')
         df['Usuario_Nombre'] = df['profiles.full_name'].fillna('...')
-        
-        # Formatear hh:mm de forma robusta con offset de -5h
-        df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
-        df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
-        
-        df['Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
-        df['Fin'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
-        df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-        df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
+        df['Inicio'] = df['Inicio'].fillna('---')
+        df['Fin'] = df['Fin'].fillna('---')
+        df['Fecha'] = df['Fecha'].fillna('---')
         
         if st.session_state.is_admin:
             rates_resp = supabase.table("project_rates").select("*").execute()
@@ -368,9 +370,9 @@ else:
                 df = pd.json_normalize(entries.data)
                 rates_df = pd.DataFrame(rates.data)
                 
-                # Formatear mm:hh y Horas de forma robusta (Admin Panel)
-                df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
-                df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
+                # Formatear con tz_convert (Admin Panel)
+                df['dt_start'] = pd.to_datetime(df['start_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
+                df['dt_end'] = pd.to_datetime(df['end_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
                 
                 df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
                 df['Hora Final'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
