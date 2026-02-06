@@ -277,13 +277,23 @@ def mostrar_registro_tiempos():
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
         
-        # SANEAMIENTO HORARIO GLOBAL (America/Bogota)
-        df['dt_start'] = pd.to_datetime(df['start_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
-        df['dt_end'] = pd.to_datetime(df['end_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
+        # SANEAMIENTO HORARIO GLOBAL (Nuclear Shift -5h Naive)
+        # Forzar desplazamiento manual de 5 horas a la izquierda (Local Lima/Bogotá)
+        def to_local_naive(col):
+            # 1. Asegurar que sea Timestamp UTC
+            ts = pd.to_datetime(col, utc=True, errors='coerce')
+            # 2. Restar 5 horas de forma absoluta
+            ts_shifted = ts - pd.Timedelta(hours=5)
+            # 3. Eliminar info de TZ para evitar auto-conversiones de Streamlit
+            return ts_shifted.dt.tz_localize(None)
+
+        df['dt_ref'] = df['start_time'].fillna(df['created_at'])
+        df['dt_start_naive'] = to_local_naive(df['dt_ref'])
+        df['dt_end_naive'] = to_local_naive(df['end_time'])
         
-        df['Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
-        df['Fin'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
-        df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
+        df['Inicio'] = df['dt_start_naive'].dt.strftime('%H:%M').fillna('---')
+        df['Fin'] = df['dt_end_naive'].dt.strftime('%H:%M').fillna('---')
+        df['Fecha'] = df['dt_start_naive'].dt.strftime('%d.%m-%Y').fillna('---')
         df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
         
         # Mapeo de nombres seguro
@@ -366,9 +376,14 @@ else:
                 df = pd.json_normalize(entries.data)
                 rates_df = pd.DataFrame(rates.data)
                 
-                # Conversión horaria robusta
-                df['dt_start'] = pd.to_datetime(df['start_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
-                df['dt_end'] = pd.to_datetime(df['end_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
+                # Conversión horaria Nuclear (Shift -5h Naive)
+                def to_local_naive_admin(col):
+                    ts = pd.to_datetime(col, utc=True, errors='coerce')
+                    return (ts - pd.Timedelta(hours=5)).dt.tz_localize(None)
+
+                df['dt_ref'] = df['start_time'].fillna(df['created_at'])
+                df['dt_start'] = to_local_naive_admin(df['dt_ref'])
+                df['dt_end'] = to_local_naive_admin(df['end_time'])
                 
                 df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
                 df['Hora Final'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
@@ -697,17 +712,18 @@ else:
                     
                     if report_q.data:
                         df_rep = pd.json_normalize(report_q.data)
-                        df_rep['dt_start'] = pd.to_datetime(df_rep['start_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
-                        df_rep['Fecha_dt'] = df_rep['dt_start'].dt.date
-                        df_rep = df_rep[(df_rep['Fecha_dt'] >= start_d) & (df_rep['Fecha_dt'] <= end_d)]
-                        
                         if df_rep.empty:
                             st.info("No hay registros en el periodo seleccionado.")
                         else:
-                            # Filtro por moneda
+                            # Shift horario para reportes
+                            df_rep['dt_ref'] = df_rep['start_time'].fillna(df_rep['created_at'])
+                            df_rep['dt_start'] = (pd.to_datetime(df_rep['dt_ref'], utc=True, errors='coerce') - pd.Timedelta(hours=5)).dt.tz_localize(None)
+                            df_rep['Fecha_dt'] = df_rep['dt_start'].dt.date
+                            df_rep['Fecha_str'] = df_rep['dt_start'].dt.strftime('%d.%m-%Y')
+                            
+                            # Filtro solo para CARTA (Tab 1), el Dashboard verá todo
                             monedas_disp = df_rep['projects.currency'].unique()
-                            moneda_liq = st.sidebar.selectbox("Moneda a Liquidar", monedas_disp)
-                            df_rep = df_rep[df_rep['projects.currency'] == moneda_liq]
+                            moneda_liq = st.sidebar.selectbox("Moneda a Liquidar (Carta)", monedas_disp)
                             
                             rates = supabase.table("project_rates").select("*").execute()
                             rates_df = pd.DataFrame(rates.data)
@@ -724,6 +740,9 @@ else:
                             tab1, tab2 = st.tabs(["📝 Carta al Cliente", "📊 Dashboard de Usuarios"])
                             
                             with tab1:
+                                # Aplicar filtro de moneda solo aquí
+                                df_carta = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
+                                
                                 st.markdown(f"""
                                 <div style="border: 1px solid #ccc; padding: 40px; background-color: white; color: black; font-family: 'Arial', sans-serif;">
                                     <h2 style="text-align: center; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">CARTA DE LIQUIDACIÓN DE SERVICIOS</h2>
@@ -742,7 +761,7 @@ else:
                                 """, unsafe_allow_html=True)
                                 
                                 # Detalle solicitado: Fecha, Usuario, descripción, Tiempo y valor.
-                                for proj, sub in df_rep.groupby('projects.name'):
+                                for proj, sub in df_carta.groupby('projects.name'):
                                     st.markdown(f"#### PROYECTO: {proj}")
                                     detalle_tab = sub[['Fecha_str', 'profiles.full_name', 'description', 'total_minutes', 'Total_Monto']].copy()
                                     detalle_tab['Tiempo'] = detalle_tab['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
