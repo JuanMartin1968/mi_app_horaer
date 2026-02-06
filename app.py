@@ -24,67 +24,26 @@ st.set_page_config(
 
 # Inicialización de Supabase con soporte para Nube
 @st.cache_resource
-def get_supabase(h_url, h_key, h_serv):
-    # 1. Intentar cargar desde Secrets (Nube o .streamlit/secrets.toml)
-    url = st.secrets.get("SUPABASE_URL")
-    key = st.secrets.get("SUPABASE_KEY")
-    service_key = st.secrets.get("SUPABASE_SERVICE_KEY")
-    
-    # 2. Si no hay Secrets (Local), cargar desde .env o el entorno
-    if not url:
-        url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_KEY")
-        service_key = os.getenv("SUPABASE_SERVICE_KEY")
+def get_supabase():
+    # 1. Intentar cargar desde Secrets o entorno
+    url = st.secrets.get("SUPABASE_URL") or os.getenv("SUPABASE_URL")
+    key = st.secrets.get("SUPABASE_KEY") or os.getenv("SUPABASE_KEY")
+    service_key = st.secrets.get("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
 
-    # 3. Limpieza de llaves
+    if not url or not key:
+        st.error("❌ Configuración incompleta. Revisa los Secrets de Streamlit.")
+        st.stop()
+
+    # 2. Limpieza de llaves
     def clean(v):
         return str(v).strip().strip('"').strip("'").strip() if v else None
 
     url, key, service_key = map(clean, [url, key, service_key])
+    
+    # Priorizar Service Key para administración
+    return create_client(url, service_key if service_key else key)
 
-    # 4. Diagnóstico de Roles y Proyectos JWT
-    def get_token_info(token):
-        if not token or not token.startswith("eyJ"): return "No JWT", "Desconocido"
-        try:
-            _, p, _ = token.split('.')
-            p += '=' * (-len(p) % 4)
-            data = json.loads(base64.b64decode(p).decode('utf-8'))
-            role = data.get('role', 'unknown')
-            
-            # Extraer Referencia del Proyecto
-            # Algunos tokens usan 'ref', otros lo tienen en 'iss' o 'sub'
-            proj_ref = data.get('ref')
-            if not proj_ref:
-                iss = data.get('iss', '')
-                if '://' in iss:
-                    proj_ref = iss.split('://')[1].split('.')[0]
-                else:
-                    proj_ref = "N/A"
-            return role, str(proj_ref)
-        except: return "Error", "Error"
-
-    role_serv, ref_serv = get_token_info(service_key)
-    diag_url = str(url)
-    diag_serv = f"Activa ({service_key[:5]}...{service_key[-5:]}) - Rol: {role_serv} - Proyecto: {ref_serv}" if service_key else "Inactiva"
-    diag_anon = f"Public ({key[:5]}...{key[-5:]})" if key else "Inactiva"
-
-    if not url or not key:
-        st.error("❌ Falta configuración de Supabase. Revisa Secrets o .env.")
-        st.stop()
-        
-    # Usar Service Key si existe, si no anon key
-    client_key = service_key if service_key else key
-    # Verificar si la referencia del proyecto está en la URL
-    match_ok = (ref_serv != "N/A") and (ref_serv in url)
-    return create_client(url, client_key), diag_url, diag_serv, diag_anon, role_serv == 'service_role', match_ok
-
-# Obtener hashes para forzar refresco si cambian los secrets
-h_u = os.getenv("SUPABASE_URL", "") + str(st.secrets.get("SUPABASE_URL", ""))
-h_k = os.getenv("SUPABASE_KEY", "") + str(st.secrets.get("SUPABASE_KEY", ""))
-h_s = os.getenv("SUPABASE_SERVICE_KEY", "") + str(st.secrets.get("SUPABASE_SERVICE_KEY", ""))
-
-# Obtener cliente y diagnósticos
-supabase, diag_active_url, diag_serv_str, diag_anon_str, is_admin_token, is_matching_proj = get_supabase(h_u, h_k, h_s)
+supabase = get_supabase()
 
 # Estilos premium
 st.markdown("""
@@ -191,10 +150,12 @@ def mostrar_registro_tiempos():
     current_rate_val = float(rate_q.data[0]['rate']) if rate_q.data else 0.0
     
     if current_rate_val <= 0:
-        st.warning(f"⚠️ **Atención**: No se han definido tarifas para el rol en este proyecto. Seleccione otro proyecto o pida al administrador que configure las tarifas.")
-        can_register = False
+        if st.session_state.is_admin:
+            st.warning(f"⚠️ **Atención**: No se han definido tarifas para el rol en este proyecto.")
+        can_register = True # Permitir registrar incluso sin tarifa (será 0)
     else:
-        st.success(f"Tarifa detectada: **{current_rate_val} {moneda}/h**")
+        if st.session_state.is_admin:
+            st.success(f"Tarifa detectada: **{current_rate_val} {moneda}/h**")
         can_register = True
 
     descripcion = st.text_area("Detalle del trabajo", placeholder="¿Qué hiciste?", key=f"desc_{st.session_state.form_key_suffix}")
@@ -215,9 +176,10 @@ def mostrar_registro_tiempos():
                 t1_dt = datetime.strptime(t_inicio_str, "%H:%M")
                 t2_dt = datetime.strptime(t_fin_str, "%H:%M")
                 
-                # Usar timezone aware datetimes para evitar "None" en base de datos al parsear
-                t1 = datetime.combine(fecha_sel, t1_dt.time()).replace(tzinfo=timezone.utc)
-                t2 = datetime.combine(fecha_sel, t2_dt.time()).replace(tzinfo=timezone.utc)
+                # Considerar UTC-5 (Bogotá/Lima) para el ingreso manual
+                tz_local = timezone(timedelta(hours=-5))
+                t1 = datetime.combine(fecha_sel, t1_dt.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                t2 = datetime.combine(fecha_sel, t2_dt.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
                 
                 if t2 <= t1:
                     st.error("La hora final debe ser posterior a la inicial.")
@@ -262,9 +224,14 @@ def mostrar_registro_tiempos():
                 total_sec = st.session_state.total_elapsed + (t_now - t_start).total_seconds()
                 total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
                 
-                # Combinar fecha seleccionada con las horas del cronómetro, asegurar timezone UTC
-                start_dt = datetime.combine(fecha_sel, t_start.time()).replace(tzinfo=timezone.utc)
-                end_dt = datetime.combine(fecha_sel, t_now.time()).replace(tzinfo=timezone.utc)
+                # Manejo de zonas horarias para el cronómetro (now es local, t_start es local)
+                tz_local = timezone(timedelta(hours=-5))
+                start_dt = datetime.combine(fecha_sel, t_start.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                end_dt = datetime.combine(fecha_sel, t_now.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                
+                # Si el tiempo es el mismo en minutos (menor a 60s), forzar al menos 1 minuto de diferencia en el fin
+                if total_min == 1 and start_dt.strftime('%H:%M') == end_dt.strftime('%H:%M'):
+                    end_dt = start_dt + timedelta(minutes=1)
                 
                 supabase.table("time_entries").insert({
                     "profile_id": target_user_id,
@@ -311,11 +278,15 @@ def mostrar_registro_tiempos():
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
         
-        # Formatear hh:mm de forma robusta
-        df['Inicio'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True).dt.strftime('%H:%M')
-        df['Fin'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True).dt.strftime('%H:%M')
-        df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{x//60:02d}:{x%60:02d}")
-        df['Fecha'] = pd.to_datetime(df['created_at'], errors='coerce', utc=True).dt.date
+        # Formatear hh:mm de forma robusta usando start_time como fuente de verdad
+        df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
+        df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
+        
+        df['Inicio'] = df['dt_start'].dt.strftime('%H:%M')
+        df['Fin'] = df['dt_end'].dt.strftime('%H:%M')
+        df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
+        # La FECHA ahora sale de start_time, no de created_at
+        df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y')
         
         if st.session_state.is_admin:
             rates_resp = supabase.table("project_rates").select("*").execute()
@@ -389,10 +360,13 @@ else:
                 rates_df = pd.DataFrame(rates.data)
                 
                 # Formatear mm:hh y Horas de forma robusta
-                df['Hora Inicio'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True).dt.strftime('%H:%M')
-                df['Hora Final'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True).dt.strftime('%H:%M')
-                df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{x//60:02d}:{x%60:02d}")
-                df['Fecha'] = pd.to_datetime(df['created_at'], errors='coerce', utc=True).dt.date
+                df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
+                df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
+                
+                df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M')
+                df['Hora Final'] = df['dt_end'].dt.strftime('%H:%M')
+                df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
+                df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y')
                 
                 def get_cost(row):
                     if not rates_df.empty:
@@ -567,20 +541,6 @@ else:
 
         elif choice == "Usuarios":
             st.header("👥 Gestión de Usuarios")
-            
-            # Diagnóstico de permisos mejorado
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                if is_admin_token and is_matching_proj:
-                    st.success(f"🔐 Admin Key: {diag_serv_str}")
-                elif is_admin_token and not is_matching_proj:
-                    st.error(f"❌ ERROR: La llave es de OTRO proyecto: {diag_serv_str}")
-                    st.warning("⚠️ Debes sacar la clave 'service_role' del mismo proyecto de la URL.")
-                else:
-                    st.error(f"❌ Admin Key: {diag_serv_str} (No es Service Role)")
-            with col_d2:
-                st.info(f"🔑 Public Key: {diag_anon_str}")
-            
             roles = supabase.table("roles").select("id, name").order("name").execute()
             role_map = {r['name']: r['id'] for r in roles.data}
             
@@ -600,34 +560,21 @@ else:
                         st.error("❌ Email y contraseña son obligatorios.")
                     else:
                         try:
-                            # 1. Intentar creación en AUTH
-                            try:
-                                new_u = supabase.auth.admin.create_user({
-                                    "email": u_email.strip(), 
-                                    "password": u_pass, 
-                                    "email_confirm": True
-                                })
-                            except Exception as auth_err:
-                                st.error(f"❌ Error en Supabase AUTH: {auth_err}")
-                                st.info("Esto suele pasar si la Service Key no tiene permisos de administrador.")
-                                st.stop()
-
-                            # 2. Intentar inserción en BASE DE DATOS
-                            try:
-                                supabase.table("profiles").insert({
-                                    "id": new_u.user.id, 
-                                    "username": u_username, 
-                                    "full_name": u_name, 
-                                    "role_id": role_map[u_role],
-                                    "doi_type": u_doi_type,
-                                    "doi_number": u_doi_number,
-                                    "is_active": False,
-                                    "is_admin": u_is_admin
-                                }).execute()
-                            except Exception as db_err:
-                                st.error(f"❌ Usuario autenticado, pero falló el perfil: {db_err}")
-                                st.stop()
-
+                            new_u = supabase.auth.admin.create_user({
+                                "email": u_email.strip(), 
+                                "password": u_pass, 
+                                "email_confirm": True
+                            })
+                            supabase.table("profiles").insert({
+                                "id": new_u.user.id, 
+                                "username": u_username, 
+                                "full_name": u_name, 
+                                "role_id": role_map[u_role],
+                                "doi_type": u_doi_type,
+                                "doi_number": u_doi_number,
+                                "is_active": False,
+                                "is_admin": u_is_admin
+                            }).execute()
                             st.success(f"✅ Usuario '{u_name}' creado con éxito.")
                             st.info("⚠️ Recuerde activarlo en la tabla de abajo para que pueda iniciar sesión.")
                         except Exception as e:
@@ -743,7 +690,9 @@ else:
                     
                     if report_q.data:
                         df_rep = pd.json_normalize(report_q.data)
-                        df_rep['Fecha_dt'] = pd.to_datetime(df_rep['created_at']).dt.date
+                        # Usar start_time para filtrar por rango de fechas en America/Bogota
+                        df_rep['dt_start'] = pd.to_datetime(df_rep['start_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
+                        df_rep['Fecha_dt'] = df_rep['dt_start'].dt.date
                         df_rep = df_rep[(df_rep['Fecha_dt'] >= start_d) & (df_rep['Fecha_dt'] <= end_d)]
                         
                         if df_rep.empty:
@@ -769,14 +718,14 @@ else:
                                 st.markdown(f"""
                                 <div style="border: 1px solid #ccc; padding: 40px; background-color: white; color: black; font-family: 'Arial', sans-serif;">
                                     <h2 style="text-align: center; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">CARTA DE LIQUIDACIÓN DE SERVICIOS</h2>
-                                    <p style="text-align: right;">Fecha: {datetime.today().strftime('%d/%m/%Y')}</p>
+                                    <p style="text-align: right;">Fecha: {datetime.today().strftime('%d.%m-%Y')}</p>
                                     <br>
                                     <p><strong>A la atención de:</strong> {cli_name_sel}</p>
                                     <p><strong>Documento:</strong> {cli_data['doi_type']} {cli_data['doi_number']}</p>
                                     <p><strong>Dirección:</strong> {cli_data['address']}</p>
                                     <br>
                                     <p>{tenor}</p>
-                                    <p><strong>Periodo:</strong> {start_d.strftime('%d/%m/%Y')} al {end_d.strftime('%d/%m/%Y')}</p>
+                                    <p><strong>Periodo:</strong> {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
                                 </div>
                                 """, unsafe_allow_html=True)
                                 
@@ -789,9 +738,10 @@ else:
                                     </div>
                                     """, unsafe_allow_html=True)
                                     
-                                    resumen_tab = sub[['Fecha_dt', 'description', 'total_minutes', 'Total_Monto']].copy()
+                                    resumen_tab = sub[['dt_start', 'description', 'total_minutes', 'Total_Monto']].copy()
                                     resumen_tab['Tiempo'] = resumen_tab['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-                                    resumen_tab = resumen_tab[['Fecha_dt', 'description', 'Tiempo', 'Total_Monto']]
+                                    resumen_tab['Fecha_str'] = resumen_tab['dt_start'].dt.strftime('%d.%m-%Y')
+                                    resumen_tab = resumen_tab[['Fecha_str', 'description', 'Tiempo', 'Total_Monto']]
                                     resumen_tab.columns = ['Fecha', 'Descripción', 'Tiempo (hh:mm)', 'Subtotal']
                                     
                                     # Configuración para tabla de carta
