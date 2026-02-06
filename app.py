@@ -213,11 +213,7 @@ def mostrar_registro_tiempos():
             hrs, rem = divmod(int(actual_elapsed), 3600)
             mins, secs = divmod(rem, 60)
             st.metric("En vivo", f"{hrs:02d}:{mins:02d}:{secs:02d}")
-            
-            # Autorefresh cada segundo si el cronómetro está activo
-            time.sleep(1)
-            st.rerun()
-            
+
             if st.button("⏸️ Pausar"):
                 st.session_state.total_elapsed += (datetime.now() - st.session_state.timer_start).total_seconds()
                 st.session_state.timer_running = False
@@ -283,14 +279,18 @@ def mostrar_registro_tiempos():
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
         
-        # Formatear hh:mm de forma robusta (Usar offset manual de -5h si tz_convert falla visualmente)
+        # Extraer nombres de clientes y proyectos de forma segura para evitar NaN
+        df['Cliente'] = df['projects.clients.name'].fillna('Desconocido')
+        df['Proyecto'] = df['projects.name'].fillna('Desconocido')
+        df['Usuario_Nombre'] = df['profiles.full_name'].fillna('...')
+        
+        # Formatear hh:mm de forma robusta con offset de -5h
         df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
         df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
         
         df['Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
         df['Fin'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
         df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-        # La FECHA ahora sale de start_time, no de created_at
         df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
         
         if st.session_state.is_admin:
@@ -307,7 +307,7 @@ def mostrar_registro_tiempos():
 
             df[['Costo Hora', 'Costo Total', 'Costo Facturable']] = df.apply(calc_billing, axis=1)
             
-            display_cols = ['Fecha', 'profiles.full_name', 'projects.clients.name', 'projects.name', 'description', 'Inicio', 'Fin', 'Tiempo (hh:mm)', 'Costo Hora', 'is_billable', 'Costo Total', 'Costo Facturable', 'is_paid', 'invoice_number']
+            display_cols = ['Fecha', 'Usuario_Nombre', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo (hh:mm)', 'Costo Hora', 'is_billable', 'Costo Total', 'Costo Facturable', 'is_paid', 'invoice_number']
             col_names = ['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Detalle', 'Hora Inicio', 'Hora Final', 'Tiempo', 'Costo Hora', 'Facturable', 'Costo Total', 'Costo Facturable', '¿Cobrado?', 'Factura #']
             
             edited_df = st.data_editor(
@@ -327,10 +327,9 @@ def mostrar_registro_tiempos():
                 st.rerun()
         else:
             # Vista simplificada para Usuario
-            display_cols = ['Fecha', 'projects.clients.name', 'projects.name', 'description', 'Inicio', 'Fin', 'Tiempo (hh:mm)']
+            display_cols = ['Fecha', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo (hh:mm)']
             col_names = ['Fecha', 'Cliente', 'Proyecto', 'Detalle', 'Hora Inicio', 'Hora Final', 'Tiempo']
             
-            # Usar dataframe en lugar de table para evitar agrupaciones automáticas de Streamlit
             st.dataframe(
                 df[display_cols].rename(columns=dict(zip(display_cols, col_names))),
                 use_container_width=True, hide_index=True
@@ -809,3 +808,8 @@ else:
     else:
         # Para roles de usuario no administrador
         mostrar_registro_tiempos()
+
+# --- REFRESH DINÁMICO (Al final para no bloquear UI) ---
+if st.session_state.get('timer_running'):
+    time.sleep(1)
+    st.rerun()
