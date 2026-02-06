@@ -5,6 +5,7 @@ import os
 import time
 import base64
 import json
+import io
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -279,7 +280,7 @@ def mostrar_registro_tiempos():
         
         # SANEAMIENTO HORARIO GLOBAL (Garantizar UTC-5 Lima/Bogotá)
         def to_local_manual(s):
-            if not s: return None
+            if pd.isna(s) or s == 'nan' or not s: return None
             try:
                 # Parsear como UTC, convertir a Lima, y quitar info de TZ para Streamlit
                 return pd.to_datetime(s, utc=True).tz_convert('America/Lima').tz_localize(None)
@@ -381,8 +382,8 @@ else:
                 
                 # Conversión horaria manual garantizada (UTC-5)
                 df['dt_ref'] = df['start_time'].fillna(df['created_at'])
-                df['dt_start'] = df['dt_ref'].apply(lambda x: pd.to_datetime(x, utc=True).tz_convert('America/Lima').tz_localize(None) if x else None)
-                df['dt_end'] = df['end_time'].apply(lambda x: pd.to_datetime(x, utc=True).tz_convert('America/Lima').tz_localize(None) if x else None)
+                df['dt_start'] = df['dt_ref'].apply(lambda x: pd.to_datetime(x, utc=True).tz_convert('America/Lima').tz_localize(None) if pd.notna(x) and x != 'nan' else None)
+                df['dt_end'] = df['end_time'].apply(lambda x: pd.to_datetime(x, utc=True).tz_convert('America/Lima').tz_localize(None) if pd.notna(x) and x != 'nan' else None)
                 
                 df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
                 df['Hora Final'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
@@ -390,7 +391,7 @@ else:
                 df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
                 
                 # Respaldo si falló el apply (si resultaron nulos pero no deberían)
-                if df['Hora Inicio'].iloc[0] == '---' and not df['dt_ref'].isnull().all():
+                if not df.empty and df['Hora Inicio'].iloc[0] == '---' and not df['dt_ref'].isnull().all():
                      df['dt_start'] = (pd.to_datetime(df['dt_ref'], utc=True) - pd.Timedelta(hours=5)).dt.tz_localize(None)
                      df['dt_end'] = (pd.to_datetime(df['end_time'], utc=True) - pd.Timedelta(hours=5)).dt.tz_localize(None)
                      df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
@@ -402,9 +403,10 @@ else:
                         r = rates_df[(rates_df['project_id'] == row['project_id']) & (rates_df['role_id'] == row['profiles.role_id'])]
                         return float(r['rate'].iloc[0]) if not r.empty else 0.0
                     return 0.0
- 
+
                 df['Costo Hora'] = df.apply(get_cost, axis=1)
                 df['Valor Total'] = (df['total_minutes'] / 60) * df['Costo Hora']
+                df['Costo Facturable'] = df.apply(lambda r: r['Valor Total'] if r['is_billable'] else 0.0, axis=1)
                 
                 # Renombrar para visualización
                 df = df.rename(columns={
@@ -426,17 +428,15 @@ else:
                 if f_user: filtered_df = filtered_df[filtered_df['Usuario'].isin(f_user)]
                 if f_client: filtered_df = filtered_df[filtered_df['Cliente'].isin(f_client)]
                 
-                # Columnas finales (Admin ve todo y puede editar 'Facturable')
-                display_cols = ['Fecha', 'Usuario', 'Rol', 'Cliente', 'Proyecto', 'Hora Inicio', 'Hora Final', 'Tiempo (hh:mm)', 'Costo Hora', 'Valor Total', 'Facturable']
-                
-                # Redondear y formatear para tabla
-                filtered_df['Costo Hora'] = filtered_df['Costo Hora'].astype(float)
-                filtered_df['Valor Total'] = filtered_df['Valor Total'].astype(float)
+                # Columnas finales (Admin ve todo y puede editar)
+                display_cols = ['id', 'Fecha', 'Usuario', 'Rol', 'Cliente', 'Proyecto', 'Hora Inicio', 'Hora Final', 'Tiempo (hh:mm)', 'Costo Hora', 'Valor Total', 'Costo Facturable', 'Facturable']
                 
                 # Configuración de columnas para alineación y formato
                 col_config = {
-                    "Costo Hora": st.column_config.NumberColumn(format="%.2f", help="Alineado a la derecha"),
-                    "Valor Total": st.column_config.NumberColumn(format="%.2f", help="Alineado a la derecha"),
+                    "id": None, # Ocultar ID
+                    "Costo Hora": st.column_config.NumberColumn(format="%,.2f"),
+                    "Valor Total": st.column_config.NumberColumn(format="%,.2f"),
+                    "Costo Facturable": st.column_config.NumberColumn(format="%,.2f"),
                     "Facturable": st.column_config.CheckboxColumn(label="✅")
                 }
                 
@@ -444,16 +444,49 @@ else:
                     filtered_df[display_cols], 
                     column_config=col_config,
                     use_container_width=True, hide_index=True,
-                    disabled=[c for c in display_cols if c != 'Facturable']
+                    disabled=['Rol', 'Cliente', 'Proyecto', 'Tiempo (hh:mm)', 'Costo Hora', 'Valor Total', 'Costo Facturable'] # Solo lo básico y Facturable es editable
                 )
                 
-                if st.button("Guardar cambios en Panel General"):
-                    for i, row in edited_gen.iterrows():
-                        orig = filtered_df.iloc[i]
-                        if row['Facturable'] != orig['Facturable']:
-                            supabase.table("time_entries").update({"is_billable": row['Facturable']}).eq("id", orig['id']).execute()
-                    st.success("✅ Privilegios de facturación actualizados.")
-                    st.rerun()
+                # El desmarcado de "Facturable" se refleja en el editor. Recalcular métricas dinámicas para visualización rápida:
+                billable_total_live = edited_gen[edited_gen['Facturable'] == True]['Costo Facturable'].sum()
+                st.info(f"💰 **Total Facturable Proyectado (en esta vista): {billable_total_live:,.2f}**")
+                
+                col_btn1, col_btn2 = st.columns([1, 1])
+                with col_btn1:
+                    if st.button("Guardar cambios en Panel General"):
+                        for i, row in edited_gen.iterrows():
+                            # Encontrar la fila original por ID
+                            orig_id = row['id']
+                            orig_row = df[df['id'] == orig_id].iloc[0]
+                            
+                            updates = {}
+                            if row['Facturable'] != orig_row['Facturable']: updates["is_billable"] = row['Facturable']
+                            if row['Fecha'] != orig_row['Fecha']: 
+                                try:
+                                    # Intentar parsear fecha editada
+                                    new_d = datetime.strptime(row['Fecha'], '%d.%m-%Y')
+                                    # Mantener la hora original
+                                    old_dt = pd.to_datetime(orig_row['dt_ref'])
+                                    new_dt = old_dt.replace(year=new_d.year, month=new_d.month, day=new_d.day)
+                                    updates["start_time"] = new_dt.isoformat()
+                                except: pass
+                            
+                            if updates:
+                                supabase.table("time_entries").update(updates).eq("id", orig_id).execute()
+                        st.success("✅ Cambios administrativos guardados.")
+                        st.rerun()
+
+                with col_btn2:
+                    # Exportar a Excel
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        filtered_df[display_cols].to_excel(writer, index=False, sheet_name='Historial')
+                    st.download_button(
+                        label="Excel 📥",
+                        data=output.getvalue(),
+                        file_name=f"historial_horas_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
                 
                 # Calcular inversión por moneda
                 st.subheader("Inversión Total por Divisa")
@@ -729,81 +762,118 @@ else:
                             df_rep['Fecha_str'] = df_rep['dt_start'].dt.strftime('%d.%m-%Y')
                             
                             # Filtro solo para CARTA (Tab 1), el Dashboard verá todo
-                            monedas_disp = df_rep['projects.currency'].unique()
-                            moneda_liq = st.sidebar.selectbox("Moneda a Liquidar (Carta)", monedas_disp)
+                            # Saneamiento de monedas (eliminar nan)
+                            monedas_disp = [m for m in df_rep['projects.currency'].unique() if pd.notna(m) and str(m) != 'nan']
+                            if not monedas_disp:
+                                st.warning("No hay monedas válidas en los proyectos seleccionados.")
+                                moneda_liq = None
+                            else:
+                                moneda_liq = st.sidebar.selectbox("Moneda a Liquidar (Carta)", monedas_disp)
                             
                             rates = supabase.table("project_rates").select("*").execute()
                             rates_df = pd.DataFrame(rates.data)
                             
                             def get_cost_rep(row):
+                                if rates_df.empty: return 0.0
                                 r = rates_df[(rates_df['project_id'] == row['project_id']) & (rates_df['role_id'] == row['profiles.role_id'])]
                                 return float(r['rate'].iloc[0]) if not r.empty else 0.0
                             
                             df_rep['Horas_num'] = df_rep['total_minutes'] / 60
                             df_rep['Costo_H'] = df_rep.apply(get_cost_rep, axis=1)
                             df_rep['Total_Monto'] = df_rep['Horas_num'] * df_rep['Costo_H']
-                            df_rep['Fecha_str'] = df_rep['dt_start'].dt.strftime('%d.%m-%Y')
+                            # Saneamiento de Fecha_str para evitar NaN visuales
+                            df_rep['Fecha_str'] = df_rep['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
                             
-                            tab1, tab2 = st.tabs(["📝 Carta al Cliente", "📊 Dashboard de Usuarios"])
+                            tab1, tab2 = st.tabs(["📝 Carta de Liquidación", "📋 Anexo Detallado / Dashboard"])
                             
                             with tab1:
-                                # Generar contenido de carta con tablas HTML integrales
-                                df_carta = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
-                                rows_html = ""
-                                for proj, sub in df_carta.groupby('projects.name'):
-                                    rows_html += f'<tr><td colspan="5" style="background-color:#f0f0f0; font-weight:bold; padding:10px;">PROYECTO: {proj}</td></tr>'
-                                    for _, r in sub.iterrows():
-                                        t_str = f"{int(r['total_minutes'])//60:02d}:{int(r['total_minutes'])%60:02d}"
-                                        rows_html += f'<tr><td style="padding:8px; border-bottom:1px solid #ddd;">{r["Fecha_str"]}</td><td style="padding:8px; border-bottom:1px solid #ddd;">{r["profiles.full_name"]}</td><td style="padding:8px; border-bottom:1px solid #ddd;">{r["description"]}</td><td style="padding:8px; border-bottom:1px solid #ddd;">{t_str}</td><td style="padding:8px; border-bottom:1px solid #ddd; text-align:right;">{moneda_liq} {r["Total_Monto"]:,.2f}</td></tr>'
-                                    rows_html += f'<tr><td colspan="4" style="text-align:right; font-weight:bold; padding:10px;">TOTAL {proj}:</td><td style="padding:10px; font-weight:bold; text-align:right;">{moneda_liq} {sub["Total_Monto"].sum():,.2f}</td></tr>'
-
-                                carta_final_html = f"""
-<div style="border: 2px solid #7c3aed; padding: 40px; background-color: white; color: black !important; font-family: Arial, sans-serif;">
-<h2 style="text-align: center; color: black !important;">CARTA DE LIQUIDACIÓN DE SERVICIOS</h2>
-<p style="text-align: right; color: black !important;">Fecha: {datetime.today().strftime('%d.%m-%Y')}</p>
-<p style="color: black !important;"><strong>Cliente:</strong> {cli_name_sel}</p>
-<p style="color: black !important;"><strong>DOI:</strong> {cli_data['doi_type']} {cli_data['doi_number']}</p>
-<p style="color: black !important;">{tenor}</p>
-<br>
-<p style="color: black !important;"><strong>Periodo:</strong> {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
-<br>
-<h3 style="text-align: center; color: black !important; border-bottom: 2px solid #7c3aed; padding-bottom: 5px;">DETALLE DE ACTIVIDADES ({moneda_liq})</h3>
-<table style="width:100%; border-collapse: collapse; color: black !important; font-size: 0.9em;">
-<thead><tr style="border-bottom: 2px solid #000;"><th style="text-align:left; padding:8px;">Fecha</th><th style="text-align:left; padding:8px;">Usuario</th><th style="text-align:left; padding:8px;">Descripción</th><th style="text-align:left; padding:8px;">Tiempo</th><th style="text-align:right; padding:8px;">Valor</th></tr></thead>
-<tbody>{rows_html}</tbody>
-</table>
-<div style="margin-top: 40px; border-top: 2px solid #000; padding-top: 20px; color: black !important;">
-<p><strong>Cuentas Bancarias y Condiciones:</strong></p>
-<div style="white-space: pre-wrap; font-family: monospace; background: #f9f9f9; padding:10px; border:1px solid #eee;">{cuentas}</div>
-<br><br><br>
-<p style="border-top: 1px solid black; width: 250px; text-align: center;">{firma}<br>Responsable</p>
-</div>
+                                if moneda_liq:
+                                    # Generar contenido de carta FORMAL (Página 1)
+                                    df_carta = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
+                                    total_general_liq = df_carta['Total_Monto'].sum()
+                                    
+                                    carta_formal_html = f"""
+<div style="border: 2px solid #7c3aed; padding: 50px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.6;">
+    <div style="text-align: center; margin-bottom: 30px;">
+        <h2 style="margin: 0; color: #444;">CARTA DE LIQUIDACIÓN DE SERVICIOS</h2>
+        <p style="margin: 5px 0;">REF: Servicios Profesionales del periodo {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
+    </div>
+    
+    <p style="text-align: right;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
+    
+    <div style="margin-bottom: 30px;">
+        <p><strong>Señores:</strong><br>
+        {cli_name_sel}<br>
+        RUC: {cli_data.get('doi_number', '---')}<br>
+        {cli_data.get('address', 'Presente.')}</p>
+    </div>
+    
+    <p style="text-align: justify;">{tenor}</p>
+    
+    <p>Por los servicios prestados durante el periodo indicado, se ha liquidado un monto total de:</p>
+    <p style="text-align: center; font-size: 1.4em; border: 2px solid #000; padding: 15px; margin: 20px 0;">
+        <strong>TOTAL A PAGAR: {moneda_liq} {total_general_liq:,.2f}</strong>
+    </p>
+    
+    <p><strong>Instrucciones de Pago:</strong></p>
+    <div style="background: #fdfdfd; padding: 15px; border: 1px dashed #ccc; white-space: pre-wrap; font-family: monospace;">{cuentas}</div>
+    
+    <br><br><br>
+    <div style="width: 250px; text-align: center;">
+        <p style="border-top: 1px solid #000; padding-top: 5px;"><strong>{firma}</strong><br>Responsable</p>
+    </div>
 </div>
 """
-                                st.markdown(carta_final_html, unsafe_allow_html=True)
+                                    st.markdown(carta_formal_html, unsafe_allow_html=True)
+                                    st.info("💡 El detalle de horas aparece en la pestaña 'Anexo Detallado'.")
+                                else:
+                                    st.warning("Seleccione una moneda para generar el reporte.")
 
                             with tab2:
-                                st.subheader("Resumen Consolidado por Usuario y Moneda")
-                                user_dashboard = df_rep.groupby(['profiles.full_name', 'projects.currency']).agg({
+                                if moneda_liq:
+                                    st.subheader(f"Anexo: Detalle Técnico ({moneda_liq})")
+                                    df_anexo = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
+                                    
+                                    # Tabla de anexo interactiva con formato
+                                    anexo_display = df_anexo[['Fecha_str', 'profiles.full_name', 'projects.name', 'description', 'total_minutes', 'Total_Monto']].copy()
+                                    anexo_display['Tiempo'] = anexo_display['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
+                                    anexo_display = anexo_display[['Fecha_str', 'profiles.full_name', 'projects.name', 'description', 'Tiempo', 'Total_Monto']]
+                                    anexo_display.columns = ['Fecha', 'Consultor', 'Proyecto', 'Actividad', 'Tiempo', 'Valor']
+                                    
+                                    st.dataframe(
+                                        anexo_display,
+                                        column_config={"Valor": st.column_config.NumberColumn(format=f"{moneda_liq} %,.2f")},
+                                        use_container_width=True, hide_index=True
+                                    )
+                                    
+                                    # Botón Excel para este reporte
+                                    exc_io = io.BytesIO()
+                                    with pd.ExcelWriter(exc_io, engine='openpyxl') as writer:
+                                        anexo_display.to_excel(writer, index=False, sheet_name='Detalle')
+                                    st.download_button(
+                                        label="Descargar Anexo Excel 📥",
+                                        data=exc_io.getvalue(),
+                                        file_name=f"Anexo_{cli_name_sel}_{moneda_liq}.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                    )
+
+                                st.markdown("---")
+                                st.subheader("Dashboard Consolidado (Todas las monedas)")
+                                dash_data = df_rep.groupby(['profiles.full_name', 'projects.currency']).agg({
                                     'Horas_num': 'sum',
                                     'Total_Monto': 'sum'
                                 }).reset_index()
-                                user_dashboard.columns = ['Usuario', 'Moneda', 'Horas', 'Monto Total']
-                                
-                                def to_hhmm_rep(h):
-                                    mins = int(round(h * 60))
-                                    return f"{mins//60:02d}:{mins%60:02d}"
-                                
-                                user_dashboard['Tiempo'] = user_dashboard['Horas'].apply(to_hhmm_rep)
+                                # Saneamiento de moneda en dashboard
+                                dash_data['projects.currency'] = dash_data['projects.currency'].fillna('---')
+                                dash_data['Tiempo'] = dash_data['Horas_num'].apply(lambda h: f"{int(round(h*60))//60:02d}:{int(round(h*60))%60:02d}")
+                                dash_data = dash_data.rename(columns={
+                                    'profiles.full_name': 'Usuario',
+                                    'projects.currency': 'Moneda',
+                                    'Total_Monto': 'Inversión'
+                                })
                                 st.dataframe(
-                                    user_dashboard[['Usuario', 'Moneda', 'Tiempo', 'Monto Total']],
-                                    use_container_width=True, hide_index=True
-                                )
-                                
-                                st.markdown("### Detalle Dashboard")
-                                st.dataframe(
-                                    df_rep[['Fecha_str', 'profiles.full_name', 'projects.name', 'description', 'total_minutes', 'Total_Monto']] \
-                                    .rename(columns={'Fecha_str': 'Fecha', 'profiles.full_name': 'Usuario', 'projects.name': 'Proyecto', 'description': 'Descripción', 'total_minutes': 'Minutos', 'Total_Monto': 'Total'}),
+                                    dash_data[['Usuario', 'Moneda', 'Tiempo', 'Inversión']],
+                                    column_config={"Inversión": st.column_config.NumberColumn(format="%,.2f")},
                                     use_container_width=True, hide_index=True
                                 )
                     else:
