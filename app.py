@@ -23,49 +23,33 @@ st.set_page_config(
 # Inicialización de Supabase con soporte para Nube
 @st.cache_resource
 def get_supabase():
-    # 1. Cargar desde .env o variables de entorno (Local habitual)
-    url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
-    service_key = os.getenv("SUPABASE_SERVICE_KEY")
+    # 1. Intentar cargar desde Secrets (Nube o .streamlit/secrets.toml)
+    url = st.secrets.get("SUPABASE_URL")
+    key = st.secrets.get("SUPABASE_KEY")
+    service_key = st.secrets.get("SUPABASE_SERVICE_KEY")
     
-    # 2. Si no están (Nube), intentar con st.secrets
+    # 2. Si no hay Secrets (Local), cargar desde .env o el entorno
     if not url:
-        try:
-            url = st.secrets["SUPABASE_URL"]
-            key = st.secrets["SUPABASE_KEY"]
-            service_key = st.secrets.get("SUPABASE_SERVICE_KEY")
-        except Exception:
-            st.error("❌ Error: No se configuraron las llaves de Supabase en los Secrets.")
-            st.stop()
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+        service_key = os.getenv("SUPABASE_SERVICE_KEY")
 
-    # 3. Limpieza profunda de llaves (quitar espacios, comillas o saltos de línea)
-    def clean_v(v):
-        if v is not None:
-            return str(v).strip().strip('"').strip("'").strip()
-        return None
+    # 3. Limpieza de llaves
+    def clean(v):
+        return str(v).strip().strip('"').strip("'").strip() if v else None
 
-    url = clean_v(url)
-    key = clean_v(key)
-    service_key = clean_v(service_key)
+    url, key, service_key = map(clean, [url, key, service_key])
 
-    # 4. Validación de seguridad
     if not url or not key:
-        st.error("❌ Error: Faltan URL o KEY de Supabase.")
+        st.error("❌ Falta configuración de Supabase. Revisa Secrets o .env.")
         st.stop()
         
-    # Usar Service Key si existe para operaciones de admin, si no anon key
-    s_key = service_key if service_key else key
-    
-    # Mostrar advertencia si falta la service key (para creación de usuarios)
-    if not service_key:
-        st.warning("⚠️ Nota: 'SUPABASE_SERVICE_KEY' no detectada. La creación de usuarios no funcionará.")
-    elif not service_key.startswith("eyJ"):
-        st.error(f"❌ La Service Key detectada es inválida (empieza con '{service_key[:5]}...'). Debe empezar con 'eyJ'.")
-        # No paramos la app, permitimos lectura, pero avisamos.
+    # Usar Service Key si existe, si no anon key
+    client_key = service_key if service_key else key
+    return create_client(url, client_key), bool(service_key)
 
-    return create_client(url, s_key)
-
-supabase = get_supabase()
+# Obtener cliente y flag de admin
+supabase, is_admin_connected = get_supabase()
 
 # Estilos premium
 st.markdown("""
@@ -548,6 +532,13 @@ else:
 
         elif choice == "Usuarios":
             st.header("👥 Gestión de Usuarios")
+            
+            # Diagnóstico de permisos
+            if is_admin_connected:
+                st.success("⚡ Conectado con permisos de Administrador (Service Key activa).")
+            else:
+                st.warning("⚠️ Conexión estándar. La creación de usuarios fallará (Falta Service Key).")
+            
             roles = supabase.table("roles").select("id, name").order("name").execute()
             role_map = {r['name']: r['id'] for r in roles.data}
             
@@ -567,8 +558,10 @@ else:
                         st.error("❌ Email y contraseña son obligatorios.")
                     else:
                         try:
-                            # Intentar creación administrativa
-                            # El cliente 'supabase' ya fue inicializado con el service_key por defecto en get_supabase() si estaba disponible
+                            # Debug por si acaso fallan los permisos
+                            if not is_admin_connected:
+                                raise Exception("La app no detectó una 'SUPABASE_SERVICE_KEY' válida.")
+                            
                             new_u = supabase.auth.admin.create_user({
                                 "email": u_email.strip(), "password": u_pass, "email_confirm": True
                             })
