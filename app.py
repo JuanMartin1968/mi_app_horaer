@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 import os
+import time
 import base64
 import json
 from datetime import datetime, timezone, timedelta
@@ -213,6 +214,10 @@ def mostrar_registro_tiempos():
             mins, secs = divmod(rem, 60)
             st.metric("En vivo", f"{hrs:02d}:{mins:02d}:{secs:02d}")
             
+            # Autorefresh cada segundo si el cronómetro está activo
+            time.sleep(1)
+            st.rerun()
+            
             if st.button("⏸️ Pausar"):
                 st.session_state.total_elapsed += (datetime.now() - st.session_state.timer_start).total_seconds()
                 st.session_state.timer_running = False
@@ -278,15 +283,15 @@ def mostrar_registro_tiempos():
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
         
-        # Formatear hh:mm de forma robusta usando start_time como fuente de verdad
-        df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
-        df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
+        # Formatear hh:mm de forma robusta (Usar offset manual de -5h si tz_convert falla visualmente)
+        df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
+        df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
         
-        df['Inicio'] = df['dt_start'].dt.strftime('%H:%M')
-        df['Fin'] = df['dt_end'].dt.strftime('%H:%M')
+        df['Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
+        df['Fin'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
         df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
         # La FECHA ahora sale de start_time, no de created_at
-        df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y')
+        df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
         
         if st.session_state.is_admin:
             rates_resp = supabase.table("project_rates").select("*").execute()
@@ -324,7 +329,12 @@ def mostrar_registro_tiempos():
             # Vista simplificada para Usuario
             display_cols = ['Fecha', 'projects.clients.name', 'projects.name', 'description', 'Inicio', 'Fin', 'Tiempo (hh:mm)']
             col_names = ['Fecha', 'Cliente', 'Proyecto', 'Detalle', 'Hora Inicio', 'Hora Final', 'Tiempo']
-            st.table(df[display_cols].rename(columns=dict(zip(display_cols, col_names))))
+            
+            # Usar dataframe en lugar de table para evitar agrupaciones automáticas de Streamlit
+            st.dataframe(
+                df[display_cols].rename(columns=dict(zip(display_cols, col_names))),
+                use_container_width=True, hide_index=True
+            )
 
 # --- CUERPO PRINCIPAL ---
 if not st.session_state.user:
@@ -359,14 +369,14 @@ else:
                 df = pd.json_normalize(entries.data)
                 rates_df = pd.DataFrame(rates.data)
                 
-                # Formatear mm:hh y Horas de forma robusta
-                df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
-                df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
+                # Formatear mm:hh y Horas de forma robusta (Admin Panel)
+                df['dt_start'] = pd.to_datetime(df['start_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
+                df['dt_end'] = pd.to_datetime(df['end_time'], errors='coerce', utc=True) - pd.Timedelta(hours=5)
                 
-                df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M')
-                df['Hora Final'] = df['dt_end'].dt.strftime('%H:%M')
+                df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
+                df['Hora Final'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
                 df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-                df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y')
+                df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
                 
                 def get_cost(row):
                     if not rates_df.empty:
