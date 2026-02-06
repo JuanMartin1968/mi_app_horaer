@@ -6,6 +6,7 @@ import time
 import base64
 import json
 import io
+import textwrap
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -318,12 +319,25 @@ def mostrar_registro_tiempos():
                 return pd.Series([rate, c_total, c_total if row['is_billable'] else 0.0])
 
             df[['Costo Hora', 'Costo Total', 'Costo Facturable']] = df.apply(calc_billing, axis=1)
+            # Redondeo físico
+            df['Costo Hora'] = df['Costo Hora'].fillna(0).round(2)
+            df['Costo Total'] = df['Costo Total'].fillna(0).round(2)
+            df['Costo Facturable'] = df['Costo Facturable'].fillna(0).round(2)
             
             display_cols = ['Fecha', 'Usuario_Nombre', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo (hh:mm)', 'Costo Hora', 'is_billable', 'Costo Total', 'Costo Facturable', 'is_paid', 'invoice_number']
             col_names = ['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Detalle', 'Hora Inicio', 'Hora Final', 'Tiempo', 'Costo Hora', 'Facturable', 'Costo Total', 'Costo Facturable', '¿Cobrado?', 'Factura #']
             
+            # Configuración uniforme
+            col_cfg_hist = {
+                "Costo Hora": st.column_config.NumberColumn(format="%,.2f"),
+                "Costo Total": st.column_config.NumberColumn(format="%,.2f"),
+                "Costo Facturable": st.column_config.NumberColumn(format="%,.2f"),
+                "Facturable": st.column_config.CheckboxColumn(label="✅")
+            }
+
             edited_df = st.data_editor(
                 df[display_cols].rename(columns=dict(zip(display_cols, col_names))),
+                column_config=col_cfg_hist,
                 use_container_width=True, hide_index=True,
                 disabled=[c for c in col_names if c not in ['¿Cobrado?', 'Factura #', 'Facturable']]
             )
@@ -431,9 +445,14 @@ else:
                 # Columnas finales (Admin ve todo y puede editar)
                 display_cols = ['id', 'Fecha', 'Usuario', 'Rol', 'Cliente', 'Proyecto', 'Hora Inicio', 'Hora Final', 'Tiempo (hh:mm)', 'Costo Hora', 'Valor Total', 'Costo Facturable', 'Facturable']
                 
+                # FORZAR REDONDEO FÍSICO EN EL DF PARA EVITAR DECIMALES LARGOS
+                filtered_df['Costo Hora'] = filtered_df['Costo Hora'].fillna(0).round(2)
+                filtered_df['Valor Total'] = filtered_df['Valor Total'].fillna(0).round(2)
+                filtered_df['Costo Facturable'] = filtered_df['Costo Facturable'].fillna(0).round(2)
+
                 # Configuración de columnas para alineación y formato
                 col_config = {
-                    "id": None, # Ocultar ID
+                    "id": st.column_config.NumberColumn(visible=False), # Habilitar ocultamiento real
                     "Costo Hora": st.column_config.NumberColumn(format="%,.2f"),
                     "Valor Total": st.column_config.NumberColumn(format="%,.2f"),
                     "Costo Facturable": st.column_config.NumberColumn(format="%,.2f"),
@@ -792,38 +811,59 @@ else:
                                     df_carta = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
                                     total_general_liq = df_carta['Total_Monto'].sum()
                                     
-                                    carta_formal_html = f"""
-<div style="border: 2px solid #7c3aed; padding: 50px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.6;">
-    <div style="text-align: center; margin-bottom: 30px;">
-        <h2 style="margin: 0; color: #444;">CARTA DE LIQUIDACIÓN DE SERVICIOS</h2>
-        <p style="margin: 5px 0;">REF: Servicios Profesionales del periodo {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
-    </div>
-    
-    <p style="text-align: right;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
-    
-    <div style="margin-bottom: 30px;">
-        <p><strong>Señores:</strong><br>
-        {cli_name_sel}<br>
-        RUC: {cli_data.get('doi_number', '---')}<br>
-        {cli_data.get('address', 'Presente.')}</p>
-    </div>
-    
-    <p style="text-align: justify;">{tenor}</p>
-    
-    <p>Por los servicios prestados durante el periodo indicado, se ha liquidado un monto total de:</p>
-    <p style="text-align: center; font-size: 1.4em; border: 2px solid #000; padding: 15px; margin: 20px 0;">
-        <strong>TOTAL A PAGAR: {moneda_liq} {total_general_liq:,.2f}</strong>
-    </p>
-    
-    <p><strong>Instrucciones de Pago:</strong></p>
-    <div style="background: #fdfdfd; padding: 15px; border: 1px dashed #ccc; white-space: pre-wrap; font-family: monospace;">{cuentas}</div>
-    
-    <br><br><br>
-    <div style="width: 250px; text-align: center;">
-        <p style="border-top: 1px solid #000; padding-top: 5px;"><strong>{firma}</strong><br>Responsable</p>
-    </div>
-</div>
-"""
+                                    # Limpieza de DOI y Dirección para evitar "nan"
+                                    doi_str = str(cli_data.get('doi_number', '')).strip()
+                                    if doi_str == 'nan': doi_str = '---'
+                                    addr_str = str(cli_data.get('address', '')).strip()
+                                    if addr_str == 'nan' or not addr_str: addr_str = 'Lima, Perú.'
+
+                                    # Limpieza de DOI y Dirección para evitar "nan"
+                                    doi_str = str(cli_data.get('doi_number', '')).strip()
+                                    if doi_str == 'nan' or not doi_str: doi_str = '---'
+                                    addr_str = str(cli_data.get('address', '')).strip()
+                                    if addr_str == 'nan' or not addr_str: addr_str = 'Lima, Perú.'
+
+                                    carta_formal_html = textwrap.dedent(f"""
+                                        <div style="padding: 60px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.6; border: 1px solid #eee; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
+                                            <div style="text-align: center; margin-bottom: 40px; border-bottom: 2px solid #7c3aed; padding-bottom: 20px;">
+                                                <h1 style="margin: 0; color: #333; letter-spacing: 2px;">ESTUDIO RODRÍGUEZ</h1>
+                                                <p style="margin: 5px 0; font-size: 0.9em; color: #666;">Consultoría y Servicios Profesionales</p>
+                                            </div>
+                                            
+                                            <p style="text-align: right; margin-bottom: 40px;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
+                                            
+                                            <div style="margin-bottom: 40px;">
+                                                <p style="margin: 0;"><strong>Señores:</strong></p>
+                                                <p style="margin: 0; font-size: 1.1em; color: #000;">{cli_name_sel.upper()}</p>
+                                                <p style="margin: 0;">RUC: {doi_str}</p>
+                                                <p style="margin: 0;">{addr_str}</p>
+                                            </div>
+                                            
+                                            <div style="margin-bottom: 30px;">
+                                                <p><strong>Ref: Liquidación de Honorarios Profesionales</strong></p>
+                                                <p style="font-size: 0.9em; color: #444;">Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
+                                            </div>
+
+                                            <p style="text-align: justify; margin-bottom: 30px;">{tenor}</p>
+                                            
+                                            <div style="background-color: #f8f9fa; padding: 25px; text-align: center; margin-bottom: 40px; border: 1px solid #ddd;">
+                                                <p style="margin: 0; font-size: 0.9em;">MONTO TOTAL A LIQUIDAR</p>
+                                                <h2 style="margin: 10px 0; color: #000;">{moneda_liq} {total_general_liq:,.2f}</h2>
+                                            </div>
+                                            
+                                            <div style="margin-bottom: 50px;">
+                                                <p><strong>Cuentas Bancarias:</strong></p>
+                                                <div style="font-family: monospace; white-space: pre-wrap; font-size: 0.95em; color: #333; padding-left: 10px; border-left: 3px solid #7c3aed;">{cuentas}</div>
+                                            </div>
+                                            
+                                            <div style="margin-top: 60px; width: 250px;">
+                                                <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">
+                                                    <p style="margin: 0;"><strong>{firma}</strong></p>
+                                                    <p style="margin: 0; font-size: 0.8em; color: #666;">Responsable de Servicios</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    """)
                                     st.markdown(carta_formal_html, unsafe_allow_html=True)
                                     st.info("💡 El detalle de horas aparece en la pestaña 'Anexo Detallado'.")
                                 else:
