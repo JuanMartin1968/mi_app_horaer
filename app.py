@@ -40,16 +40,20 @@ def get_supabase():
 
     url, key, service_key = map(clean, [url, key, service_key])
 
+    # Debug de llaves (Solo fragmentos por seguridad)
+    diag_serv = f"Activa ({service_key[:5]}...{service_key[-5:]})" if service_key else "Inactiva"
+    diag_anon = f"Public ({key[:5]}...{key[-5:]})" if key else "Inactiva"
+
     if not url or not key:
         st.error("❌ Falta configuración de Supabase. Revisa Secrets o .env.")
         st.stop()
         
     # Usar Service Key si existe, si no anon key
     client_key = service_key if service_key else key
-    return create_client(url, client_key), bool(service_key)
+    return create_client(url, client_key), diag_serv, diag_anon
 
-# Obtener cliente y flag de admin
-supabase, is_admin_connected = get_supabase()
+# Obtener cliente y diagnósticos
+supabase, diag_serv_str, diag_anon_str = get_supabase()
 
 # Estilos premium
 st.markdown("""
@@ -533,11 +537,15 @@ else:
         elif choice == "Usuarios":
             st.header("👥 Gestión de Usuarios")
             
-            # Diagnóstico de permisos
-            if is_admin_connected:
-                st.success("⚡ Conectado con permisos de Administrador (Service Key activa).")
-            else:
-                st.warning("⚠️ Conexión estándar. La creación de usuarios fallará (Falta Service Key).")
+            # Diagnóstico de permisos mejorado
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                if "Activa" in diag_serv_str:
+                    st.success(f"🔐 Admin Key: {diag_serv_str}")
+                else:
+                    st.error(f"❌ Admin Key: {diag_serv_str}")
+            with col_d2:
+                st.info(f"🔑 Public Key: {diag_anon_str}")
             
             roles = supabase.table("roles").select("id, name").order("name").execute()
             role_map = {r['name']: r['id'] for r in roles.data}
@@ -558,23 +566,34 @@ else:
                         st.error("❌ Email y contraseña son obligatorios.")
                     else:
                         try:
-                            # Debug por si acaso fallan los permisos
-                            if not is_admin_connected:
-                                raise Exception("La app no detectó una 'SUPABASE_SERVICE_KEY' válida.")
-                            
-                            new_u = supabase.auth.admin.create_user({
-                                "email": u_email.strip(), "password": u_pass, "email_confirm": True
-                            })
-                            supabase.table("profiles").insert({
-                                "id": new_u.user.id, 
-                                "username": u_username, 
-                                "full_name": u_name, 
-                                "role_id": role_map[u_role],
-                                "doi_type": u_doi_type,
-                                "doi_number": u_doi_number,
-                                "is_active": False, # Desactivado por defecto
-                                "is_admin": u_is_admin
-                            }).execute()
+                            # 1. Intentar creación en AUTH
+                            try:
+                                new_u = supabase.auth.admin.create_user({
+                                    "email": u_email.strip(), 
+                                    "password": u_pass, 
+                                    "email_confirm": True
+                                })
+                            except Exception as auth_err:
+                                st.error(f"❌ Error en Supabase AUTH: {auth_err}")
+                                st.info("Esto suele pasar si la Service Key no tiene permisos de administrador.")
+                                st.stop()
+
+                            # 2. Intentar inserción en BASE DE DATOS
+                            try:
+                                supabase.table("profiles").insert({
+                                    "id": new_u.user.id, 
+                                    "username": u_username, 
+                                    "full_name": u_name, 
+                                    "role_id": role_map[u_role],
+                                    "doi_type": u_doi_type,
+                                    "doi_number": u_doi_number,
+                                    "is_active": False,
+                                    "is_admin": u_is_admin
+                                }).execute()
+                            except Exception as db_err:
+                                st.error(f"❌ Usuario autenticado, pero falló el perfil: {db_err}")
+                                st.stop()
+
                             st.success(f"✅ Usuario '{u_name}' creado con éxito.")
                             st.info("⚠️ Recuerde activarlo en la tabla de abajo para que pueda iniciar sesión.")
                         except Exception as e:
