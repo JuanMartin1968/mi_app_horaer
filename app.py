@@ -5,8 +5,12 @@ import os
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
-# Cargar variables del archivo .env
-load_dotenv()
+# Cargar variables del archivo .env buscando el archivo en la misma carpeta que este script
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+else:
+    load_dotenv() # Fallback por si acaso
 
 # Configuración de la página
 st.set_page_config(
