@@ -276,24 +276,20 @@ def mostrar_registro_tiempos():
     
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
-        # Formatear horas forzando zona horaria local de Lima/Bogotá (UTC-5)
-        # 1. Asegurar que start_time sea procesado como UTC
+        
+        # SANEAMIENTO HORARIO GLOBAL (America/Bogota)
         df['dt_start'] = pd.to_datetime(df['start_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
         df['dt_end'] = pd.to_datetime(df['end_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
         
-        # 2. Formatear a string (NaT se vuelve NaN)
-        df['Inicio'] = df['dt_start'].dt.strftime('%H:%M')
-        df['Fin'] = df['dt_end'].dt.strftime('%H:%M')
-        df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y')
+        df['Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
+        df['Fin'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
+        df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
         df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
         
-        # 3. Llenar huecos con fallback absoluto
+        # Mapeo de nombres seguro
         df['Cliente'] = df['projects.clients.name'].fillna('Desconocido')
         df['Proyecto'] = df['projects.name'].fillna('Desconocido')
         df['Usuario_Nombre'] = df['profiles.full_name'].fillna('...')
-        df['Inicio'] = df['Inicio'].fillna('---')
-        df['Fin'] = df['Fin'].fillna('---')
-        df['Fecha'] = df['Fecha'].fillna('---')
         
         if st.session_state.is_admin:
             rates_resp = supabase.table("project_rates").select("*").execute()
@@ -370,7 +366,7 @@ else:
                 df = pd.json_normalize(entries.data)
                 rates_df = pd.DataFrame(rates.data)
                 
-                # Formatear con tz_convert (Admin Panel)
+                # Conversión horaria robusta
                 df['dt_start'] = pd.to_datetime(df['start_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
                 df['dt_end'] = pd.to_datetime(df['end_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
                 
@@ -701,105 +697,96 @@ else:
                     
                     if report_q.data:
                         df_rep = pd.json_normalize(report_q.data)
-                        # Usar start_time para filtrar por rango de fechas en America/Bogota
-                        df_rep['dt_start'] = pd.to_datetime(df_rep['start_time'], errors='coerce', utc=True).dt.tz_convert('America/Bogota')
+                        df_rep['dt_start'] = pd.to_datetime(df_rep['start_time'], utc=True, errors='coerce').dt.tz_convert('America/Bogota')
                         df_rep['Fecha_dt'] = df_rep['dt_start'].dt.date
                         df_rep = df_rep[(df_rep['Fecha_dt'] >= start_d) & (df_rep['Fecha_dt'] <= end_d)]
                         
                         if df_rep.empty:
-                            st.info("No hay registros en el periodo seleccionado para este cliente.")
+                            st.info("No hay registros en el periodo seleccionado.")
                         else:
+                            # Filtro por moneda
+                            monedas_disp = df_rep['projects.currency'].unique()
+                            moneda_liq = st.sidebar.selectbox("Moneda a Liquidar", monedas_disp)
+                            df_rep = df_rep[df_rep['projects.currency'] == moneda_liq]
+                            
                             rates = supabase.table("project_rates").select("*").execute()
                             rates_df = pd.DataFrame(rates.data)
                             
                             def get_cost_rep(row):
-                                if not rates_df.empty:
-                                    r = rates_df[(rates_df['project_id'] == row['project_id']) & (rates_df['role_id'] == row['profiles.role_id'])]
-                                    return float(r['rate'].iloc[0]) if not r.empty else 0.0
-                                return 0.0
+                                r = rates_df[(rates_df['project_id'] == row['project_id']) & (rates_df['role_id'] == row['profiles.role_id'])]
+                                return float(r['rate'].iloc[0]) if not r.empty else 0.0
                             
                             df_rep['Horas_num'] = df_rep['total_minutes'] / 60
                             df_rep['Costo_H'] = df_rep.apply(get_cost_rep, axis=1)
                             df_rep['Total_Monto'] = df_rep['Horas_num'] * df_rep['Costo_H']
+                            df_rep['Fecha_str'] = df_rep['dt_start'].dt.strftime('%d.%m-%Y')
                             
-                            tab1, tab2 = st.tabs(["📝 Carta al Cliente (Formal)", "👥 Resumen por Usuario"])
+                            tab1, tab2 = st.tabs(["📝 Carta al Cliente", "📊 Dashboard de Usuarios"])
                             
                             with tab1:
-                                # Formato de Carta Profesional
                                 st.markdown(f"""
                                 <div style="border: 1px solid #ccc; padding: 40px; background-color: white; color: black; font-family: 'Arial', sans-serif;">
                                     <h2 style="text-align: center; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">CARTA DE LIQUIDACIÓN DE SERVICIOS</h2>
                                     <p style="text-align: right;">Fecha: {datetime.today().strftime('%d.%m-%Y')}</p>
                                     <br>
-                                    <p><strong>A la atención de:</strong> {cli_name_sel}</p>
-                                    <p><strong>Documento:</strong> {cli_data['doi_type']} {cli_data['doi_number']}</p>
-                                    <p><strong>Dirección:</strong> {cli_data['address']}</p>
-                                    <br>
+                                    <p><strong>Cliente:</strong> {cli_name_sel}</p>
+                                    <p><strong>DOI:</strong> {cli_data['doi_type']} {cli_data['doi_number']}</p>
                                     <p>{tenor}</p>
                                     <p><strong>Periodo:</strong> {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
+                                    
+                                    <!-- SALTO DE PAGINA CSS -->
+                                    <div style="page-break-after: always; height: 1px; margin: 40px 0; border-top: 2px dashed #eee;"></div>
+                                    
+                                    <h3 style="text-align: center;">DETALLE DE ACTIVIDADES ({moneda_liq})</h3>
                                 </div>
                                 """, unsafe_allow_html=True)
                                 
-                                # Detalle por Proyecto
-                                for (proj, curr), sub in df_rep.groupby(['projects.name', 'projects.currency']):
-                                    st.markdown(f"""
-                                    <div style="background-color: #f9f9f9; padding: 10px; margin-top: 20px; border-left: 5px solid #7c3aed;">
-                                        <h4 style="margin: 0; color: black;">PROYECTO: {proj}</h4>
-                                        <p style="margin: 0; font-size: 0.9em; color: black;">Moneda: {curr}</p>
-                                    </div>
-                                    """, unsafe_allow_html=True)
+                                # Detalle solicitado: Fecha, Usuario, descripción, Tiempo y valor.
+                                for proj, sub in df_rep.groupby('projects.name'):
+                                    st.markdown(f"#### PROYECTO: {proj}")
+                                    detalle_tab = sub[['Fecha_str', 'profiles.full_name', 'description', 'total_minutes', 'Total_Monto']].copy()
+                                    detalle_tab['Tiempo'] = detalle_tab['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
+                                    detalle_tab = detalle_tab[['Fecha_str', 'profiles.full_name', 'description', 'Tiempo', 'Total_Monto']]
+                                    detalle_tab.columns = ['Fecha', 'Usuario', 'Descripción', 'Tiempo', 'Valor']
                                     
-                                    resumen_tab = sub[['dt_start', 'description', 'total_minutes', 'Total_Monto']].copy()
-                                    resumen_tab['Tiempo'] = resumen_tab['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-                                    resumen_tab['Fecha_str'] = resumen_tab['dt_start'].dt.strftime('%d.%m-%Y')
-                                    resumen_tab = resumen_tab[['Fecha_str', 'description', 'Tiempo', 'Total_Monto']]
-                                    resumen_tab.columns = ['Fecha', 'Descripción', 'Tiempo (hh:mm)', 'Subtotal']
-                                    
-                                    # Configuración para tabla de carta
                                     st.dataframe(
-                                        resumen_tab,
-                                        column_config={
-                                            "Subtotal": st.column_config.NumberColumn(format=f"{curr} %.2f")
-                                        },
+                                        detalle_tab,
+                                        column_config={"Valor": st.column_config.NumberColumn(format=f"{moneda_liq} %.2f")},
                                         use_container_width=True, hide_index=True
                                     )
-                                    
-                                    monto_total_proyecto = float(sub['Total_Monto'].sum())
-                                    st.markdown(f"<p style='text-align: right; font-weight: bold; font-size: 1.2em; color: black;'>Total Proyecto: {curr} {monto_total_proyecto:,.2f}</p>", unsafe_allow_html=True)
+                                    st.markdown(f"<p style='text-align: right; font-weight: bold;'>Total {proj}: {moneda_liq} {sub['Total_Monto'].sum():,.2f}</p>", unsafe_allow_html=True)
 
                                 st.markdown(f"""
-                                <div style="margin-top: 40px; color: black;">
-                                    <p><strong>Condiciones de Pago:</strong></p>
-                                    <pre style="background: none; border: none; font-family: inherit; white-space: pre-wrap; color: black;">{cuentas}</pre>
+                                <div style="margin-top: 20px; border: 1px solid #ccc; padding: 20px; background-color: #f9f9f9; color: black;">
+                                    <p><strong>Cuentas Bancarias:</strong></p>
+                                    <p style="white-space: pre-wrap;">{cuentas}</p>
                                     <br><br>
-                                    <p style="border-top: 1px solid black; width: 250px; text-align: center; color: black;">{firma}<br>Responsable</p>
-                                </div>
+                                    <p style="border-top: 1px solid black; width: 250px; text-align: center;">{firma}</p>
                                 </div>
                                 """, unsafe_allow_html=True)
 
                             with tab2:
-                                st.subheader("Resumen Consolidado por Usuario")
-                                # Agrupar por Usuario y moneda del proyecto
-                                user_summary = df_rep.groupby(['profiles.full_name', 'projects.currency']).agg({
+                                st.subheader("Resumen Consolidado por Usuario y Moneda")
+                                user_dashboard = df_rep.groupby(['profiles.full_name', 'projects.currency']).agg({
                                     'Horas_num': 'sum',
                                     'Total_Monto': 'sum'
                                 }).reset_index()
+                                user_dashboard.columns = ['Usuario', 'Moneda', 'Horas', 'Monto Total']
                                 
-                                user_summary.columns = ['Usuario', 'Moneda', 'Total Horas', 'Monto Total']
-                                
-                                # Convertir decimales a HH:mm
                                 def to_hhmm_rep(h):
                                     mins = int(round(h * 60))
                                     return f"{mins//60:02d}:{mins%60:02d}"
                                 
-                                user_summary['Tiempo (hh:mm)'] = user_summary['Total Horas'].apply(to_hhmm_rep)
-                                
-                                # Reordenar y configurar
+                                user_dashboard['Tiempo'] = user_dashboard['Horas'].apply(to_hhmm_rep)
                                 st.dataframe(
-                                    user_summary[['Usuario', 'Moneda', 'Tiempo (hh:mm)', 'Monto Total']],
-                                    column_config={
-                                        "Monto Total": st.column_config.NumberColumn(format="%.2f", help="Alineado a la derecha")
-                                    },
+                                    user_dashboard[['Usuario', 'Moneda', 'Tiempo', 'Monto Total']],
+                                    use_container_width=True, hide_index=True
+                                )
+                                
+                                st.markdown("### Detalle Dashboard")
+                                st.dataframe(
+                                    df_rep[['Fecha_str', 'profiles.full_name', 'projects.name', 'description', 'total_minutes', 'Total_Monto']] \
+                                    .rename(columns={'Fecha_str': 'Fecha', 'profiles.full_name': 'Usuario', 'projects.name': 'Proyecto', 'description': 'Descripción', 'total_minutes': 'Minutos', 'Total_Monto': 'Total'}),
                                     use_container_width=True, hide_index=True
                                 )
                     else:
