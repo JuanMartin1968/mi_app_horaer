@@ -23,30 +23,46 @@ st.set_page_config(
 # Inicialización de Supabase con soporte para Nube
 @st.cache_resource
 def get_supabase():
-    # Intentar obtener de variables de entorno (Local)
+    # 1. Cargar desde .env o variables de entorno (Local habitual)
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_KEY")
     service_key = os.getenv("SUPABASE_SERVICE_KEY")
     
-    # Si no están en el sistema (Nube), intentar con st.secrets
+    # 2. Si no están (Nube), intentar con st.secrets
     if not url:
         try:
             url = st.secrets["SUPABASE_URL"]
             key = st.secrets["SUPABASE_KEY"]
-            service_key = st.secrets["SUPABASE_SERVICE_KEY"]
-        except:
-            st.error("❌ Error: No se configuraron las llaves de Supabase. Revisa la Guía de Despliegue.")
+            service_key = st.secrets.get("SUPABASE_SERVICE_KEY")
+        except Exception:
+            st.error("❌ Error: No se configuraron las llaves de Supabase en los Secrets.")
             st.stop()
-            
-    # Para el administrador usamos service_key para gestionar usuarios, si no, anon key
+
+    # 3. Limpieza profunda de llaves (quitar espacios, comillas o saltos de línea)
+    def clean_v(v):
+        if v is not None:
+            return str(v).strip().strip('"').strip("'").strip()
+        return None
+
+    url = clean_v(url)
+    key = clean_v(key)
+    service_key = clean_v(service_key)
+
+    # 4. Validación de seguridad
+    if not url or not key:
+        st.error("❌ Error: Faltan URL o KEY de Supabase.")
+        st.stop()
+        
+    # Usar Service Key si existe para operaciones de admin, si no anon key
     s_key = service_key if service_key else key
     
-    # Validación visual para el usuario
+    # Mostrar advertencia si falta la service key (para creación de usuarios)
     if not service_key:
-        st.warning("⚠️ 'SUPABASE_SERVICE_KEY' no detectada. La creación de usuarios fallará.")
+        st.warning("⚠️ Nota: 'SUPABASE_SERVICE_KEY' no detectada. La creación de usuarios no funcionará.")
     elif not service_key.startswith("eyJ"):
-        st.error("❌ 'SUPABASE_SERVICE_KEY' parece inválida (debe empezar con 'eyJ'). Revisa la guía.")
-    
+        st.error(f"❌ La Service Key detectada es inválida (empieza con '{service_key[:5]}...'). Debe empezar con 'eyJ'.")
+        # No paramos la app, permitimos lectura, pero avisamos.
+
     return create_client(url, s_key)
 
 supabase = get_supabase()
