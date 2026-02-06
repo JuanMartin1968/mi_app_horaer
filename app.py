@@ -50,13 +50,21 @@ def get_supabase(h_url, h_key, h_serv):
             p += '=' * (-len(p) % 4)
             data = json.loads(base64.b64decode(p).decode('utf-8'))
             role = data.get('role', 'unknown')
-            # Extraer ref del emisor (iss): https://ref.supabase.co/auth/v1
-            iss = data.get('iss', '')
-            proj_ref = iss.split('://')[1].split('.')[0] if '://' in iss else "N/A"
-            return role, proj_ref
+            
+            # Extraer Referencia del Proyecto
+            # Algunos tokens usan 'ref', otros lo tienen en 'iss' o 'sub'
+            proj_ref = data.get('ref')
+            if not proj_ref:
+                iss = data.get('iss', '')
+                if '://' in iss:
+                    proj_ref = iss.split('://')[1].split('.')[0]
+                else:
+                    proj_ref = "N/A"
+            return role, str(proj_ref)
         except: return "Error", "Error"
 
     role_serv, ref_serv = get_token_info(service_key)
+    diag_url = str(url)
     diag_serv = f"Activa ({service_key[:5]}...{service_key[-5:]}) - Rol: {role_serv} - Proyecto: {ref_serv}" if service_key else "Inactiva"
     diag_anon = f"Public ({key[:5]}...{key[-5:]})" if key else "Inactiva"
 
@@ -66,7 +74,9 @@ def get_supabase(h_url, h_key, h_serv):
         
     # Usar Service Key si existe, si no anon key
     client_key = service_key if service_key else key
-    return create_client(url, client_key), diag_serv, diag_anon, role_serv == 'service_role', ref_serv in url
+    # Verificar si la referencia del proyecto está en la URL
+    match_ok = (ref_serv != "N/A") and (ref_serv in url)
+    return create_client(url, client_key), diag_url, diag_serv, diag_anon, role_serv == 'service_role', match_ok
 
 # Obtener hashes para forzar refresco si cambian los secrets
 h_u = os.getenv("SUPABASE_URL", "") + str(st.secrets.get("SUPABASE_URL", ""))
@@ -74,7 +84,7 @@ h_k = os.getenv("SUPABASE_KEY", "") + str(st.secrets.get("SUPABASE_KEY", ""))
 h_s = os.getenv("SUPABASE_SERVICE_KEY", "") + str(st.secrets.get("SUPABASE_SERVICE_KEY", ""))
 
 # Obtener cliente y diagnósticos
-supabase, diag_serv_str, diag_anon_str, is_admin_token, is_matching_proj = get_supabase(h_u, h_k, h_s)
+supabase, diag_active_url, diag_serv_str, diag_anon_str, is_admin_token, is_matching_proj = get_supabase(h_u, h_k, h_s)
 
 # Estilos premium
 st.markdown("""
