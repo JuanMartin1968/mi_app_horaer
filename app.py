@@ -277,19 +277,22 @@ def mostrar_registro_tiempos():
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
         
-        # SANEAMIENTO HORARIO GLOBAL (Nuclear Shift -5h Naive)
-        # Forzar desplazamiento manual de 5 horas a la izquierda (Local Lima/Bogotá)
-        def to_local_naive(col):
-            # 1. Asegurar que sea Timestamp UTC
-            ts = pd.to_datetime(col, utc=True, errors='coerce')
-            # 2. Restar 5 horas de forma absoluta
-            ts_shifted = ts - pd.Timedelta(hours=5)
-            # 3. Eliminar info de TZ para evitar auto-conversiones de Streamlit
-            return ts_shifted.dt.tz_localize(None)
+        # SANEAMIENTO HORARIO GLOBAL (Garantizar UTC-5 Lima/Bogotá)
+        def to_local_manual(s):
+            if not s: return None
+            try:
+                # Parsear como UTC, convertir a Lima, y quitar info de TZ para Streamlit
+                return pd.to_datetime(s, utc=True).tz_convert('America/Lima').tz_localize(None)
+            except:
+                try:
+                    # Fallback manual si tz_convert falla (Shift -5h)
+                    return pd.to_datetime(s).replace(tzinfo=None) - pd.Timedelta(hours=5)
+                except:
+                    return None
 
         df['dt_ref'] = df['start_time'].fillna(df['created_at'])
-        df['dt_start_naive'] = to_local_naive(df['dt_ref'])
-        df['dt_end_naive'] = to_local_naive(df['end_time'])
+        df['dt_start_naive'] = df['dt_ref'].apply(to_local_manual)
+        df['dt_end_naive'] = df['end_time'].apply(to_local_manual)
         
         df['Inicio'] = df['dt_start_naive'].dt.strftime('%H:%M').fillna('---')
         df['Fin'] = df['dt_end_naive'].dt.strftime('%H:%M').fillna('---')
@@ -376,19 +379,23 @@ else:
                 df = pd.json_normalize(entries.data)
                 rates_df = pd.DataFrame(rates.data)
                 
-                # Conversión horaria Nuclear (Shift -5h Naive)
-                def to_local_naive_admin(col):
-                    ts = pd.to_datetime(col, utc=True, errors='coerce')
-                    return (ts - pd.Timedelta(hours=5)).dt.tz_localize(None)
-
+                # Conversión horaria manual garantizada (UTC-5)
                 df['dt_ref'] = df['start_time'].fillna(df['created_at'])
-                df['dt_start'] = to_local_naive_admin(df['dt_ref'])
-                df['dt_end'] = to_local_naive_admin(df['end_time'])
+                df['dt_start'] = df['dt_ref'].apply(lambda x: pd.to_datetime(x, utc=True).tz_convert('America/Lima').tz_localize(None) if x else None)
+                df['dt_end'] = df['end_time'].apply(lambda x: pd.to_datetime(x, utc=True).tz_convert('America/Lima').tz_localize(None) if x else None)
                 
                 df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
                 df['Hora Final'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
                 df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
                 df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
+                
+                # Respaldo si falló el apply (si resultaron nulos pero no deberían)
+                if df['Hora Inicio'].iloc[0] == '---' and not df['dt_ref'].isnull().all():
+                     df['dt_start'] = (pd.to_datetime(df['dt_ref'], utc=True) - pd.Timedelta(hours=5)).dt.tz_localize(None)
+                     df['dt_end'] = (pd.to_datetime(df['end_time'], utc=True) - pd.Timedelta(hours=5)).dt.tz_localize(None)
+                     df['Hora Inicio'] = df['dt_start'].dt.strftime('%H:%M').fillna('---')
+                     df['Hora Final'] = df['dt_end'].dt.strftime('%H:%M').fillna('---')
+                     df['Fecha'] = df['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
                 
                 def get_cost(row):
                     if not rates_df.empty:
@@ -740,49 +747,40 @@ else:
                             tab1, tab2 = st.tabs(["📝 Carta al Cliente", "📊 Dashboard de Usuarios"])
                             
                             with tab1:
-                                # Aplicar filtro de moneda solo aquí
+                                # Generar contenido de carta con tablas HTML integrales
                                 df_carta = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
-                                
-                                st.markdown(f"""
-                                <div style="border: 1px solid #ccc; padding: 40px; background-color: white; color: black; font-family: 'Arial', sans-serif;">
-                                    <h2 style="text-align: center; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">CARTA DE LIQUIDACIÓN DE SERVICIOS</h2>
-                                    <p style="text-align: right;">Fecha: {datetime.today().strftime('%d.%m-%Y')}</p>
-                                    <br>
-                                    <p><strong>Cliente:</strong> {cli_name_sel}</p>
-                                    <p><strong>DOI:</strong> {cli_data['doi_type']} {cli_data['doi_number']}</p>
-                                    <p>{tenor}</p>
-                                    <p><strong>Periodo:</strong> {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
-                                    
-                                    <!-- SALTO DE PAGINA CSS -->
-                                    <div style="page-break-after: always; height: 1px; margin: 40px 0; border-top: 2px dashed #eee;"></div>
-                                    
-                                    <h3 style="text-align: center;">DETALLE DE ACTIVIDADES ({moneda_liq})</h3>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                # Detalle solicitado: Fecha, Usuario, descripción, Tiempo y valor.
+                                rows_html = ""
                                 for proj, sub in df_carta.groupby('projects.name'):
-                                    st.markdown(f"#### PROYECTO: {proj}")
-                                    detalle_tab = sub[['Fecha_str', 'profiles.full_name', 'description', 'total_minutes', 'Total_Monto']].copy()
-                                    detalle_tab['Tiempo'] = detalle_tab['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-                                    detalle_tab = detalle_tab[['Fecha_str', 'profiles.full_name', 'description', 'Tiempo', 'Total_Monto']]
-                                    detalle_tab.columns = ['Fecha', 'Usuario', 'Descripción', 'Tiempo', 'Valor']
-                                    
-                                    st.dataframe(
-                                        detalle_tab,
-                                        column_config={"Valor": st.column_config.NumberColumn(format=f"{moneda_liq} %.2f")},
-                                        use_container_width=True, hide_index=True
-                                    )
-                                    st.markdown(f"<p style='text-align: right; font-weight: bold;'>Total {proj}: {moneda_liq} {sub['Total_Monto'].sum():,.2f}</p>", unsafe_allow_html=True)
+                                    rows_html += f'<tr><td colspan="5" style="background-color:#f0f0f0; font-weight:bold; padding:10px;">PROYECTO: {proj}</td></tr>'
+                                    for _, r in sub.iterrows():
+                                        t_str = f"{int(r['total_minutes'])//60:02d}:{int(r['total_minutes'])%60:02d}"
+                                        rows_html += f'<tr><td style="padding:8px; border-bottom:1px solid #ddd;">{r["Fecha_str"]}</td><td style="padding:8px; border-bottom:1px solid #ddd;">{r["profiles.full_name"]}</td><td style="padding:8px; border-bottom:1px solid #ddd;">{r["description"]}</td><td style="padding:8px; border-bottom:1px solid #ddd;">{t_str}</td><td style="padding:8px; border-bottom:1px solid #ddd; text-align:right;">{moneda_liq} {r["Total_Monto"]:,.2f}</td></tr>'
+                                    rows_html += f'<tr><td colspan="4" style="text-align:right; font-weight:bold; padding:10px;">TOTAL {proj}:</td><td style="padding:10px; font-weight:bold; text-align:right;">{moneda_liq} {sub["Total_Monto"].sum():,.2f}</td></tr>'
 
-                                st.markdown(f"""
-                                <div style="margin-top: 20px; border: 1px solid #ccc; padding: 20px; background-color: #f9f9f9; color: black;">
-                                    <p><strong>Cuentas Bancarias:</strong></p>
-                                    <p style="white-space: pre-wrap;">{cuentas}</p>
-                                    <br><br>
-                                    <p style="border-top: 1px solid black; width: 250px; text-align: center;">{firma}</p>
-                                </div>
-                                """, unsafe_allow_html=True)
+                                carta_final_html = f"""
+<div style="border: 2px solid #7c3aed; padding: 40px; background-color: white; color: black !important; font-family: Arial, sans-serif;">
+<h2 style="text-align: center; color: black !important;">CARTA DE LIQUIDACIÓN DE SERVICIOS</h2>
+<p style="text-align: right; color: black !important;">Fecha: {datetime.today().strftime('%d.%m-%Y')}</p>
+<p style="color: black !important;"><strong>Cliente:</strong> {cli_name_sel}</p>
+<p style="color: black !important;"><strong>DOI:</strong> {cli_data['doi_type']} {cli_data['doi_number']}</p>
+<p style="color: black !important;">{tenor}</p>
+<br>
+<p style="color: black !important;"><strong>Periodo:</strong> {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
+<br>
+<h3 style="text-align: center; color: black !important; border-bottom: 2px solid #7c3aed; padding-bottom: 5px;">DETALLE DE ACTIVIDADES ({moneda_liq})</h3>
+<table style="width:100%; border-collapse: collapse; color: black !important; font-size: 0.9em;">
+<thead><tr style="border-bottom: 2px solid #000;"><th style="text-align:left; padding:8px;">Fecha</th><th style="text-align:left; padding:8px;">Usuario</th><th style="text-align:left; padding:8px;">Descripción</th><th style="text-align:left; padding:8px;">Tiempo</th><th style="text-align:right; padding:8px;">Valor</th></tr></thead>
+<tbody>{rows_html}</tbody>
+</table>
+<div style="margin-top: 40px; border-top: 2px solid #000; padding-top: 20px; color: black !important;">
+<p><strong>Cuentas Bancarias y Condiciones:</strong></p>
+<div style="white-space: pre-wrap; font-family: monospace; background: #f9f9f9; padding:10px; border:1px solid #eee;">{cuentas}</div>
+<br><br><br>
+<p style="border-top: 1px solid black; width: 250px; text-align: center;">{firma}<br>Responsable</p>
+</div>
+</div>
+"""
+                                st.markdown(carta_final_html, unsafe_allow_html=True)
 
                             with tab2:
                                 st.subheader("Resumen Consolidado por Usuario y Moneda")
