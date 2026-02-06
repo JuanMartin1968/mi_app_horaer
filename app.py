@@ -24,7 +24,7 @@ st.set_page_config(
 
 # Inicialización de Supabase con soporte para Nube
 @st.cache_resource
-def get_supabase():
+def get_supabase(h_url, h_key, h_serv):
     # 1. Intentar cargar desde Secrets (Nube o .streamlit/secrets.toml)
     url = st.secrets.get("SUPABASE_URL")
     key = st.secrets.get("SUPABASE_KEY")
@@ -42,18 +42,22 @@ def get_supabase():
 
     url, key, service_key = map(clean, [url, key, service_key])
 
-    # 4. Diagnóstico de Roles JWT
-    def get_role_diag(token):
-        if not token or not token.startswith("eyJ"): return "No JWT"
+    # 4. Diagnóstico de Roles y Proyectos JWT
+    def get_token_info(token):
+        if not token or not token.startswith("eyJ"): return "No JWT", "Desconocido"
         try:
             _, p, _ = token.split('.')
             p += '=' * (-len(p) % 4)
             data = json.loads(base64.b64decode(p).decode('utf-8'))
-            return data.get('role', 'unknown')
-        except: return "Error Decod"
+            role = data.get('role', 'unknown')
+            # Extraer ref del emisor (iss): https://ref.supabase.co/auth/v1
+            iss = data.get('iss', '')
+            proj_ref = iss.split('://')[1].split('.')[0] if '://' in iss else "N/A"
+            return role, proj_ref
+        except: return "Error", "Error"
 
-    role_serv = get_role_diag(service_key)
-    diag_serv = f"Activa ({service_key[:5]}...{service_key[-5:]}) - Rol: {role_serv}" if service_key else "Inactiva"
+    role_serv, ref_serv = get_token_info(service_key)
+    diag_serv = f"Activa ({service_key[:5]}...{service_key[-5:]}) - Rol: {role_serv} - Proyecto: {ref_serv}" if service_key else "Inactiva"
     diag_anon = f"Public ({key[:5]}...{key[-5:]})" if key else "Inactiva"
 
     if not url or not key:
@@ -62,10 +66,15 @@ def get_supabase():
         
     # Usar Service Key si existe, si no anon key
     client_key = service_key if service_key else key
-    return create_client(url, client_key), diag_serv, diag_anon, role_serv == 'service_role'
+    return create_client(url, client_key), diag_serv, diag_anon, role_serv == 'service_role', ref_serv in url
+
+# Obtener hashes para forzar refresco si cambian los secrets
+h_u = os.getenv("SUPABASE_URL", "") + str(st.secrets.get("SUPABASE_URL", ""))
+h_k = os.getenv("SUPABASE_KEY", "") + str(st.secrets.get("SUPABASE_KEY", ""))
+h_s = os.getenv("SUPABASE_SERVICE_KEY", "") + str(st.secrets.get("SUPABASE_SERVICE_KEY", ""))
 
 # Obtener cliente y diagnósticos
-supabase, diag_serv_str, diag_anon_str, is_admin_token = get_supabase()
+supabase, diag_serv_str, diag_anon_str, is_admin_token, is_matching_proj = get_supabase(h_u, h_k, h_s)
 
 # Estilos premium
 st.markdown("""
@@ -552,8 +561,11 @@ else:
             # Diagnóstico de permisos mejorado
             col_d1, col_d2 = st.columns(2)
             with col_d1:
-                if is_admin_token:
+                if is_admin_token and is_matching_proj:
                     st.success(f"🔐 Admin Key: {diag_serv_str}")
+                elif is_admin_token and not is_matching_proj:
+                    st.error(f"❌ ERROR: La llave es de OTRO proyecto: {diag_serv_str}")
+                    st.warning("⚠️ Debes sacar la clave 'service_role' del mismo proyecto de la URL.")
                 else:
                     st.error(f"❌ Admin Key: {diag_serv_str} (No es Service Role)")
             with col_d2:
