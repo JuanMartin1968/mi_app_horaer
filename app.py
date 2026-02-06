@@ -326,14 +326,14 @@ else:
             st.rerun()
 
     if st.session_state.is_admin:
-        menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas"]
+        menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas", "Facturación y Reportes"]
         choice = st.sidebar.selectbox("Seleccione Módulo", menu)
 
         if choice == "Panel General":
             st.header("📊 Panel General de Horas")
             
             # Query base (Admin ve todo)
-            entries_q = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, clients(name))").order("created_at", desc=True)
+            entries_q = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, clients(name))").order("created_at", desc=True)
             entries = entries_q.execute()
             rates = supabase.table("project_rates").select("*").execute()
             
@@ -379,6 +379,10 @@ else:
                 # Columnas finales (Admin ve todo y puede editar 'Facturable')
                 display_cols = ['Fecha', 'Usuario', 'Rol', 'Cliente', 'Proyecto', 'Hora Inicio', 'Hora Final', 'Tiempo (hh:mm)', 'Costo Hora', 'Valor Total', 'Facturable']
                 
+                # Redondear y formatear para tabla
+                filtered_df['Costo Hora'] = filtered_df['Costo Hora'].round(2)
+                filtered_df['Valor Total'] = filtered_df['Valor Total'].round(2)
+                
                 edited_gen = st.data_editor(
                     filtered_df[display_cols], 
                     use_container_width=True, hide_index=True,
@@ -393,7 +397,19 @@ else:
                     st.success("✅ Privilegios de facturación actualizados.")
                     st.rerun()
                 
-                st.metric("Inversión Total", f"${filtered_df['Valor Total'].sum():,.2f}")
+                # Calcular inversión por moneda
+                st.subheader("Inversión Total por Divisa")
+                if not filtered_df.empty:
+                    # Agrupar por la moneda del proyecto (que sacamos del join)
+                    # El campo en el df normalizado es 'projects.currency'
+                    if 'projects.currency' in filtered_df:
+                        metrics_cols = st.columns(len(filtered_df['projects.currency'].unique()))
+                        for i, (curr, group) in enumerate(filtered_df.groupby('projects.currency')):
+                            with metrics_cols[i]:
+                                total_curr = group['Valor Total'].sum()
+                                st.metric(f"Total {curr}", f"{curr} {total_curr:,.2f}")
+                    else:
+                        st.metric("Inversión Total", f"${filtered_df['Valor Total'].sum():,.2f}")
             else:
                 st.info("No hay registros de tiempo aún.")
 
@@ -507,10 +523,12 @@ else:
                 u_doi_type = st.selectbox("Tipo DOI", ["DNI", "RUC", "CE", "PASAPORTE"])
                 u_doi_number = st.text_input("Número de DOI")
                 u_role = st.selectbox("Rol Operativo (para tarifas)", list(role_map.keys()))
+                u_is_admin = st.checkbox("¿Es Administrador?")
                 st.info("💡 Por seguridad, los nuevos usuarios se crean DESACTIVADOS.")
                 
                 if st.form_submit_button("Crear Usuario"):
                     try:
+                        # Asegurar que usamos service_role key si existe
                         new_u = supabase.auth.admin.create_user({
                             "email": u_email, "password": u_pass, "email_confirm": True
                         })
@@ -522,11 +540,12 @@ else:
                             "doi_type": u_doi_type,
                             "doi_number": u_doi_number,
                             "is_active": False, # Desactivado por defecto
-                            "is_admin": False
+                            "is_admin": u_is_admin
                         }).execute()
-                        st.success(f"✅ Usuario '{u_name}' creado. Debe activarlo en la tabla inferior.")
+                        st.success(f"✅ Usuario '{u_name}' creado. Debe activarlo en la tabla inferior para que pueda entrar.")
                     except Exception as e:
                         st.error(f"Error: {e}")
+                        st.info("Nota: La creación de usuarios requiere que la Service Key esté configurada correctamente en los secretos.")
             
             st.subheader("Usuarios Registrados")
             users_resp = supabase.table("profiles").select("*, roles(name)").execute()
@@ -608,6 +627,87 @@ else:
                                 supabase.table("project_rates").insert({"project_id": proj_map[proj_sel], "role_id": r_id, "rate": val}).execute()
                     st.success(f"✅ Tarifas para '{proj_sel}' guardadas.")
                     st.rerun()
+
+        elif choice == "Facturación y Reportes":
+            st.header("📄 Facturación y Reportes")
+            
+            # Filtros de Reporte
+            clientes_q = supabase.table("clients").select("id, name").order("name").execute()
+            if not clientes_q.data:
+                st.warning("Debe registrar clientes primero.")
+            else:
+                col_r1, col_r2 = st.columns(2)
+                with col_r1:
+                    cli_map = {c['name']: c['id'] for c in clientes_q.data}
+                    cli_sel = st.selectbox("Seleccionar Cliente", list(cli_map.keys()))
+                with col_r2:
+                    date_range = st.date_input("Rango de Fechas", [datetime.today().replace(day=1), datetime.today()])
+                
+                if len(date_range) == 2:
+                    start_d, end_d = date_range
+                    # Traer registros para ese cliente y rango
+                    report_q = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, client_id)").eq("projects.client_id", cli_map[cli_sel]).execute()
+                    
+                    if report_q.data:
+                        # Filtrar por fecha localmente para mayor precisión con el selector de Streamlit
+                        df_rep = pd.json_normalize(report_q.data)
+                        df_rep['Fecha_dt'] = pd.to_datetime(df_rep['created_at']).dt.date
+                        df_rep = df_rep[(df_rep['Fecha_dt'] >= start_d) & (df_rep['Fecha_dt'] <= end_d)]
+                        
+                        if df_rep.empty:
+                            st.info("No hay registros en el periodo seleccionado para este cliente.")
+                        else:
+                            # Calcular costos
+                            rates = supabase.table("project_rates").select("*").execute()
+                            rates_df = pd.DataFrame(rates.data)
+                            
+                            def get_cost_rep(row):
+                                if not rates_df.empty:
+                                    r = rates_df[(rates_df['project_id'] == row['project_id']) & (rates_df['role_id'] == row['profiles.role_id'])]
+                                    return float(r['rate'].iloc[0]) if not r.empty else 0.0
+                                return 0.0
+                            
+                            df_rep['Costo_H'] = df_rep.apply(get_cost_rep, axis=1)
+                            df_rep['Total'] = (df_rep['total_minutes'] / 60) * df_rep['Costo_H']
+                            df_rep['Horas'] = df_rep['total_minutes'] / 60
+                            
+                            tab1, tab2 = st.tabs(["📝 Carta al Cliente", "👤 Resumen por Usuario"])
+                            
+                            with tab1:
+                                st.subheader(f"Carta de Cobro: {cli_sel}")
+                                st.write(f"**Periodo:** {start_d} al {end_d}")
+                                
+                                # Consolidado por Proyecto/Moneda
+                                for (proj, curr), sub in df_rep.groupby(['projects.name', 'projects.currency']):
+                                    st.markdown(f"### Proyecto: {proj}")
+                                    st.write(f"**Moneda:** {curr}")
+                                    
+                                    # Tabla resumida de tareas
+                                    resumen_tareas = sub[['Fecha_dt', 'description', 'Horas', 'Total']].copy()
+                                    resumen_tareas.columns = ['Fecha', 'Descripción', 'Horas', 'Monto']
+                                    resumen_tareas['Monto'] = resumen_tareas['Monto'].map(lambda x: f"{curr} {x:,.2f}")
+                                    resumen_tareas['Horas'] = resumen_tareas['Horas'].map(lambda x: f"{x:,.2f}")
+                                    st.table(resumen_tareas)
+                                    
+                                    total_p = sub['Total'].sum()
+                                    st.markdown(f"**TOTAL {proj}: {curr} {total_p:,.2f}**")
+                                    st.markdown("---")
+
+                            with tab2:
+                                st.subheader("Resumen de Horas por Usuario")
+                                # Agrupar por nombre de usuario
+                                user_summary = df_rep.groupby('profiles.full_name').agg({
+                                    'Horas': 'sum',
+                                    'Total': 'sum'
+                                }).reset_index()
+                                user_summary.columns = ['Usuario', 'Total Horas', 'Costo Total']
+                                user_summary['Total Horas'] = user_summary['Total Horas'].round(2)
+                                user_summary['Costo Total'] = user_summary['Costo Total'].round(2)
+                                st.table(user_summary)
+                    else:
+                        st.info("No se encontraron registros para este cliente.")
+                else:
+                    st.info("Seleccione un rango de fechas (Inicio y Fin).")
 
     else:
         # Para roles de usuario no administrador
