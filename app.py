@@ -39,10 +39,15 @@ def get_supabase():
             st.stop()
             
     # Para el administrador usamos service_key para gestionar usuarios, si no, anon key
-    if not service_key:
-        st.warning("⚠️ Nota: 'SUPABASE_SERVICE_KEY' no detectada. No podrá crear usuarios nuevos.")
+    s_key = service_key if service_key else key
     
-    return create_client(url, service_key if service_key else key)
+    # Validación visual para el usuario
+    if not service_key:
+        st.warning("⚠️ 'SUPABASE_SERVICE_KEY' no detectada. La creación de usuarios fallará.")
+    elif not service_key.startswith("eyJ"):
+        st.error("❌ 'SUPABASE_SERVICE_KEY' parece inválida (debe empezar con 'eyJ'). Revisa la guía.")
+    
+    return create_client(url, s_key)
 
 supabase = get_supabase()
 
@@ -728,7 +733,6 @@ else:
                                     resumen_tab.columns = ['Fecha', 'Descripción', 'Tiempo (hh:mm)', 'Subtotal']
                                     
                                     # Configuración para tabla de carta
-                                    # Configuración para tabla de carta
                                     st.dataframe(
                                         resumen_tab,
                                         column_config={
@@ -737,8 +741,8 @@ else:
                                         use_container_width=True, hide_index=True
                                     )
                                     
-                                    total_proj = sub['Total_Monto'].sum()
-                                    st.markdown(f"<p style='text-align: right; font-weight: bold; font-size: 1.2em; color: black;'>Total Proyecto: {curr} {total_proj:,.2f}</p>", unsafe_allow_html=True)
+                                    monto_total_proyecto = float(sub['Total_Monto'].sum())
+                                    st.markdown(f"<p style='text-align: right; font-weight: bold; font-size: 1.2em; color: black;'>Total Proyecto: {curr} {monto_total_proyecto:,.2f}</p>", unsafe_allow_html=True)
 
                                 st.markdown(f"""
                                 <div style="margin-top: 40px; color: black;">
