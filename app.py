@@ -16,6 +16,10 @@ try:
 except ImportError:
     HAS_OPENPYXL = False
 
+# Helper para zona horaria (Lima/Bogotá UTC-5)
+def get_lima_now():
+    return datetime.now(timezone.utc) - timedelta(hours=5)
+
 # Cargar variables del archivo .env buscando el archivo en la misma carpeta que este script
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 if os.path.exists(env_path):
@@ -131,8 +135,9 @@ def mostrar_registro_tiempos():
     proj_currency = {p['id']: p['currency'] for p in proyectos.data}
     proyecto_sel = st.selectbox("Seleccionar Proyecto", list(proj_map.keys()), key=f"pro_{st.session_state.form_key_suffix}")
     # Variables para alcance (Scope)
+    # Variables para alcance (Scope)
     target_user_id = st.session_state.user.id
-    fecha_sel = datetime.today()
+    fecha_sel = get_lima_now()
     p_id = proj_map[proyecto_sel]
     moneda = proj_currency[p_id]
     
@@ -140,7 +145,7 @@ def mostrar_registro_tiempos():
     
     col_u1, col_u2 = st.columns(2)
     with col_u1:
-        fecha_sel = st.date_input("Fecha", value=datetime.today(), max_value=datetime.today(), key=f"fec_{st.session_state.form_key_suffix}")
+        fecha_sel = st.date_input("Fecha", value=get_lima_now(), max_value=get_lima_now(), key=f"fec_{st.session_state.form_key_suffix}")
     with col_u2:
         if st.session_state.is_admin:
             usuarios_res = supabase.table("profiles").select("id, full_name").eq("is_active", True).execute()
@@ -509,11 +514,11 @@ else:
                         st.download_button(
                             label="Descargar Reporte Excel 📥",
                             data=output.getvalue(),
-                            file_name=f"historial_horas_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            file_name=f"historial_horas_{get_lima_now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
                     else:
-                        st.error("⚠️ Librería 'openpyxl' no detectada. Contacte al administrador.")
+                        st.empty() # No mostrar error si no hay librería
                 
                 # Calcular inversión por moneda
                 st.subheader("Inversión Total por Divisa")
@@ -765,7 +770,7 @@ else:
                     cli_name_sel = st.selectbox("Seleccionar Cliente", list(cli_map.keys()))
                     cli_data = cli_map[cli_name_sel]
                     
-                    date_range = st.date_input("Rango de Fechas", [datetime.today().replace(day=1), datetime.today()])
+                    date_range = st.date_input("Rango de Fechas", [get_lima_now().replace(day=1), get_lima_now()])
                     
                     st.markdown("---")
                     st.markdown("### Datos para la Carta")
@@ -839,7 +844,7 @@ El monto total de los honorarios asciende a {MONEDA} {MONTO}, el cual incluye to
                                     tenor_final = tenor.replace("{CLIENTE}", cli_name_sel.upper())\
                                                        .replace("{RUC}", doi_str)\
                                                        .replace("{DIRECCION}", addr_str)\
-                                                       .replace("{FECHA}", datetime.today().strftime('%d de %B de %Y'))\
+                        .replace("{FECHA}", get_lima_now().strftime('%d de %B de %Y'))\
                                                        .replace("{PERIODO}", f"{start_d.strftime('%d.%m.%Y')} al {end_d.strftime('%d.%m.%Y')}")\
                                                        .replace("{MONTO}", f"{total_general_liq:,.2f}")\
                                                        .replace("{MONEDA}", moneda_liq)
@@ -850,7 +855,7 @@ El monto total de los honorarios asciende a {MONEDA} {MONTO}, el cual incluye to
 <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">
 <h2 style="margin: 0; color: #333; text-transform: uppercase;">CARTA DE PRESENTACIÓN DE SERVICIOS</h2>
 </div>
-<p style="text-align: right; margin-bottom: 40px;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
+<p style="text-align: right; margin-bottom: 40px;">Lima, {get_lima_now().strftime('%d de %B de %Y')}</p>
 <div style="margin-bottom: 30px;">
 <p style="margin: 0;"><strong>Señores:</strong></p>
 <p style="margin: 0; font-size: 1.1em; font-weight: bold; color: #000;">{cli_name_sel.upper()}</p>
