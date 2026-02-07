@@ -828,41 +828,36 @@ else:
                                     addr_str = str(cli_data.get('address', '')).strip()
                                     if addr_str == 'nan' or not addr_str: addr_str = 'Lima, Perú.'
 
+                                    # Construcción de HTML sin indentación para evitar bloques de código
                                     carta_formal_html = f"""
-<div style="padding: 40px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.5; border: 1px solid #ddd;">
-    <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">
-        <h2 style="margin: 0; color: #333;">REPORTE DE SERVICIOS PROFESIONALES</h2>
-    </div>
-    
-    <p style="text-align: right;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
-    
-    <div style="margin-bottom: 30px;">
-        <p><strong>Señores:</strong><br>
-        {cli_name_sel.upper()}<br>
-        RUC: {doi_str}<br>
-        {addr_str}</p>
-    </div>
-    
-    <div style="margin-bottom: 20px;">
-        <p><strong>Ref: Liquidación de Honorarios</strong><br>
-        Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
-    </div>
-
-    <p style="text-align: justify;">{tenor}</p>
-    
-    <div style="background-color: #f9f9f9; padding: 20px; text-align: center; margin: 30px 0; border: 1px solid #ccc;">
-        <p style="margin: 0; font-size: 0.9em;">MONTO TOTAL A LIQUIDAR</p>
-        <h3 style="margin: 5px 0; color: #000;">{moneda_liq} {total_general_liq:,.2f}</h3>
-    </div>
-    
-    <div style="margin-bottom: 40px;">
-        <p><strong>Instrucciones de Pago:</strong></p>
-        <div style="font-family: monospace; white-space: pre-wrap; background: #fafafa; padding: 10px; border-left: 3px solid #7c3aed;">{cuentas}</div>
-    </div>
-    
-    <div style="margin-top: 50px; width: 250px; border-top: 1px solid #000; text-align: center; padding-top: 5px;">
-        <strong>{firma}</strong><br>Responsable
-    </div>
+<div style="padding: 40px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.5; border: 1px solid #ddd; max-width: 800px; margin: auto;">
+<div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">
+<h2 style="margin: 0; color: #333; text-transform: uppercase;">REPORTE DE SERVICIOS PROFESIONALES</h2>
+</div>
+<p style="text-align: right; margin-bottom: 40px;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
+<div style="margin-bottom: 30px;">
+<p style="margin: 0;"><strong>Señores:</strong></p>
+<p style="margin: 0; font-size: 1.1em; font-weight: bold; color: #000;">{cli_name_sel.upper()}</p>
+<p style="margin: 0;">RUC: {doi_str}</p>
+<p style="margin: 0;">{addr_str}</p>
+</div>
+<div style="margin-bottom: 20px;">
+<p><strong>Ref: Liquidación de Honorarios</strong><br>
+Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
+</div>
+<p style="text-align: justify; margin-bottom: 30px;">{tenor}</p>
+<div style="background-color: #f8f9fa; padding: 25px; text-align: center; margin: 30px 0; border: 1px solid #e9ecef; border-radius: 4px;">
+<p style="margin: 0; font-size: 0.9em; color: #666; text-transform: uppercase; letter-spacing: 1px;">MONTO TOTAL A LIQUIDAR</p>
+<h3 style="margin: 10px 0; color: #000; font-size: 1.8em;">{moneda_liq} {total_general_liq:,.2f}</h3>
+</div>
+<div style="margin-bottom: 40px;">
+<p><strong>Instrucciones de Pago:</strong></p>
+<div style="font-family: monospace; white-space: pre-wrap; background: #fafafa; padding: 15px; border-left: 4px solid #7c3aed; font-size: 0.95em; color: #333;">{cuentas}</div>
+</div>
+<div style="margin-top: 60px; width: 250px; border-top: 1px solid #000; text-align: center; padding-top: 10px; margin-left: auto; margin-right: auto;">
+<strong>{firma}</strong><br>
+<span style="font-size: 0.9em; color: #666;">Responsable</span>
+</div>
 </div>
 """
                                     st.markdown(carta_formal_html, unsafe_allow_html=True)
