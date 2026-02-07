@@ -896,7 +896,6 @@ else:
                     st.error(f"Error al leer archivo: {e}")
 
         elif choice == "Facturación y Reportes":
-        elif choice == "Facturación y Reportes":
             st.header("📄 Facturación y Reportes")
             
             # Filtros de Reporte
@@ -1019,7 +1018,11 @@ else:
                     st.info("Seleccione un rango de fechas en la barra lateral.")
 
     else:
+        # Para roles de usuario no administrador
+        mostrar_registro_tiempos()
+
 # --- REFRESH DINÁMICO (Al final para no bloquear UI) ---
+
 if st.session_state.get('timer_running'):
     time.sleep(1)
     st.rerun()
