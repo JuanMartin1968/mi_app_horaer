@@ -452,7 +452,7 @@ else:
 
                 # Configuración de columnas para alineación y formato
                 col_config = {
-                    "id": st.column_config.NumberColumn(visible=False), # Habilitar ocultamiento real
+                    "id": None, # Habilitar ocultamiento real sin error
                     "Costo Hora": st.column_config.NumberColumn(format="%,.2f"),
                     "Valor Total": st.column_config.NumberColumn(format="%,.2f"),
                     "Costo Facturable": st.column_config.NumberColumn(format="%,.2f"),
@@ -496,16 +496,21 @@ else:
                         st.rerun()
 
                 with col_btn2:
-                    # Exportar a Excel
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        filtered_df[display_cols].to_excel(writer, index=False, sheet_name='Historial')
-                    st.download_button(
-                        label="Excel 📥",
-                        data=output.getvalue(),
-                        file_name=f"historial_horas_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                    # Exportar a Excel con manejo de errores si la biblioteca no ha cargado
+                    try:
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            filtered_df[display_cols].to_excel(writer, index=False, sheet_name='Historial')
+                        st.download_button(
+                            label="Excel 📥",
+                            data=output.getvalue(),
+                            file_name=f"historial_horas_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    except ModuleNotFoundError:
+                        st.warning("⚠️ El módulo de descarga Excel se está inicializando. Por favor, intente de nuevo en unos minutos.")
+                    except Exception as e:
+                        st.error(f"Error al generar Excel: {e}")
                 
                 # Calcular inversión por moneda
                 st.subheader("Inversión Total por Divisa")
@@ -823,47 +828,43 @@ else:
                                     addr_str = str(cli_data.get('address', '')).strip()
                                     if addr_str == 'nan' or not addr_str: addr_str = 'Lima, Perú.'
 
-                                    carta_formal_html = textwrap.dedent(f"""
-                                        <div style="padding: 60px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.6; border: 1px solid #eee; box-shadow: 0 4px 6px rgba(0,0,0,0.05);">
-                                            <div style="text-align: center; margin-bottom: 40px; border-bottom: 2px solid #7c3aed; padding-bottom: 20px;">
-                                                <h1 style="margin: 0; color: #333; letter-spacing: 2px;">ESTUDIO RODRÍGUEZ</h1>
-                                                <p style="margin: 5px 0; font-size: 0.9em; color: #666;">Consultoría y Servicios Profesionales</p>
-                                            </div>
-                                            
-                                            <p style="text-align: right; margin-bottom: 40px;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
-                                            
-                                            <div style="margin-bottom: 40px;">
-                                                <p style="margin: 0;"><strong>Señores:</strong></p>
-                                                <p style="margin: 0; font-size: 1.1em; color: #000;">{cli_name_sel.upper()}</p>
-                                                <p style="margin: 0;">RUC: {doi_str}</p>
-                                                <p style="margin: 0;">{addr_str}</p>
-                                            </div>
-                                            
-                                            <div style="margin-bottom: 30px;">
-                                                <p><strong>Ref: Liquidación de Honorarios Profesionales</strong></p>
-                                                <p style="font-size: 0.9em; color: #444;">Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
-                                            </div>
+                                    carta_formal_html = f"""
+<div style="padding: 40px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.5; border: 1px solid #ddd;">
+    <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">
+        <h2 style="margin: 0; color: #333;">REPORTE DE SERVICIOS PROFESIONALES</h2>
+    </div>
+    
+    <p style="text-align: right;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
+    
+    <div style="margin-bottom: 30px;">
+        <p><strong>Señores:</strong><br>
+        {cli_name_sel.upper()}<br>
+        RUC: {doi_str}<br>
+        {addr_str}</p>
+    </div>
+    
+    <div style="margin-bottom: 20px;">
+        <p><strong>Ref: Liquidación de Honorarios</strong><br>
+        Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
+    </div>
 
-                                            <p style="text-align: justify; margin-bottom: 30px;">{tenor}</p>
-                                            
-                                            <div style="background-color: #f8f9fa; padding: 25px; text-align: center; margin-bottom: 40px; border: 1px solid #ddd;">
-                                                <p style="margin: 0; font-size: 0.9em;">MONTO TOTAL A LIQUIDAR</p>
-                                                <h2 style="margin: 10px 0; color: #000;">{moneda_liq} {total_general_liq:,.2f}</h2>
-                                            </div>
-                                            
-                                            <div style="margin-bottom: 50px;">
-                                                <p><strong>Cuentas Bancarias:</strong></p>
-                                                <div style="font-family: monospace; white-space: pre-wrap; font-size: 0.95em; color: #333; padding-left: 10px; border-left: 3px solid #7c3aed;">{cuentas}</div>
-                                            </div>
-                                            
-                                            <div style="margin-top: 60px; width: 250px;">
-                                                <div style="border-top: 1px solid #000; text-align: center; padding-top: 10px;">
-                                                    <p style="margin: 0;"><strong>{firma}</strong></p>
-                                                    <p style="margin: 0; font-size: 0.8em; color: #666;">Responsable de Servicios</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    """)
+    <p style="text-align: justify;">{tenor}</p>
+    
+    <div style="background-color: #f9f9f9; padding: 20px; text-align: center; margin: 30px 0; border: 1px solid #ccc;">
+        <p style="margin: 0; font-size: 0.9em;">MONTO TOTAL A LIQUIDAR</p>
+        <h3 style="margin: 5px 0; color: #000;">{moneda_liq} {total_general_liq:,.2f}</h3>
+    </div>
+    
+    <div style="margin-bottom: 40px;">
+        <p><strong>Instrucciones de Pago:</strong></p>
+        <div style="font-family: monospace; white-space: pre-wrap; background: #fafafa; padding: 10px; border-left: 3px solid #7c3aed;">{cuentas}</div>
+    </div>
+    
+    <div style="margin-top: 50px; width: 250px; border-top: 1px solid #000; text-align: center; padding-top: 5px;">
+        <strong>{firma}</strong><br>Responsable
+    </div>
+</div>
+"""
                                     st.markdown(carta_formal_html, unsafe_allow_html=True)
                                     st.info("💡 El detalle de horas aparece en la pestaña 'Anexo Detallado'.")
                                 else:
@@ -886,16 +887,21 @@ else:
                                         use_container_width=True, hide_index=True
                                     )
                                     
-                                    # Botón Excel para este reporte
-                                    exc_io = io.BytesIO()
-                                    with pd.ExcelWriter(exc_io, engine='openpyxl') as writer:
-                                        anexo_display.to_excel(writer, index=False, sheet_name='Detalle')
-                                    st.download_button(
-                                        label="Descargar Anexo Excel 📥",
-                                        data=exc_io.getvalue(),
-                                        file_name=f"Anexo_{cli_name_sel}_{moneda_liq}.xlsx",
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                    )
+                                    # Botón Excel para este reporte con manejo de errores
+                                    try:
+                                        exc_io = io.BytesIO()
+                                        with pd.ExcelWriter(exc_io, engine='openpyxl') as writer:
+                                            anexo_display.to_excel(writer, index=False, sheet_name='Detalle')
+                                        st.download_button(
+                                            label="Descargar Anexo Excel 📥",
+                                            data=exc_io.getvalue(),
+                                            file_name=f"Anexo_{cli_name_sel}_{moneda_liq}.xlsx",
+                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                        )
+                                    except ModuleNotFoundError:
+                                        st.warning("⚠️ Módulo Excel en preparación. Intente en unos instantes.")
+                                    except Exception as e:
+                                        st.error(f"Error al generar Anexo Excel: {e}")
 
                                 st.markdown("---")
                                 st.subheader("Dashboard Consolidado (Todas las monedas)")
