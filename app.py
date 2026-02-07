@@ -3,12 +3,18 @@ import pandas as pd
 from supabase import create_client, Client
 import os
 import time
-import base64
 import json
 import io
 import textwrap
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+
+# Importación segura de openpyxl
+try:
+    import openpyxl
+    HAS_OPENPYXL = True
+except ImportError:
+    HAS_OPENPYXL = False
 
 # Cargar variables del archivo .env buscando el archivo en la misma carpeta que este script
 env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -453,9 +459,9 @@ else:
                 # Configuración de columnas para alineación y formato
                 col_config = {
                     "id": None, # Habilitar ocultamiento real sin error
-                    "Costo Hora": st.column_config.NumberColumn(format="%,.2f"),
-                    "Valor Total": st.column_config.NumberColumn(format="%,.2f"),
-                    "Costo Facturable": st.column_config.NumberColumn(format="%,.2f"),
+                    "Costo Hora": st.column_config.NumberColumn(format="%.2f"),
+                    "Valor Total": st.column_config.NumberColumn(format="%.2f"),
+                    "Costo Facturable": st.column_config.NumberColumn(format="%.2f"),
                     "Facturable": st.column_config.CheckboxColumn(label="✅")
                 }
                 
@@ -496,21 +502,18 @@ else:
                         st.rerun()
 
                 with col_btn2:
-                    # Exportar a Excel con manejo de errores si la biblioteca no ha cargado
-                    try:
+                    if HAS_OPENPYXL:
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='openpyxl') as writer:
                             filtered_df[display_cols].to_excel(writer, index=False, sheet_name='Historial')
                         st.download_button(
-                            label="Excel 📥",
+                            label="Descargar Reporte Excel 📥",
                             data=output.getvalue(),
                             file_name=f"historial_horas_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
-                    except ModuleNotFoundError:
-                        st.warning("⚠️ El módulo de descarga Excel se está inicializando. Por favor, intente de nuevo en unos minutos.")
-                    except Exception as e:
-                        st.error(f"Error al generar Excel: {e}")
+                    else:
+                        st.error("⚠️ Librería 'openpyxl' no detectada. Contacte al administrador.")
                 
                 # Calcular inversión por moneda
                 st.subheader("Inversión Total por Divisa")
@@ -766,9 +769,13 @@ else:
                     
                     st.markdown("---")
                     st.markdown("### Datos para la Carta")
-                    tenor = st.text_area("Tenor de la Carta", value="Por la presente detallamos los servicios profesionales realizados en el periodo indicado:", height=100)
+                    st.info("💡 Use los marcadores {CLIENTE}, {RUC}, {DIRECCION}, {FECHA}, {PERIODO}, {MONTO}, {MONEDA} en el tenor.")
+                    default_tenor = """Por medio de la presente, hacemos llegar nuestro cordial saludo y a la vez remitimos el reporte de las horas incurridas por los servicios profesionales brindados a {CLIENTE} durante el periodo {PERIODO}.
+
+El monto total de los honorarios asciende a {MONEDA} {MONTO}, el cual incluye todos los impuestos de ley."""
+                    tenor = st.text_area("Cuerpo de la Carta (Editable)", value=default_tenor, height=150)
                     cuentas = st.text_area("Cuentas Bancarias", value="BCP Soles: XXX-XXXXXXX-X-XX\nBCP Dólares: YYY-YYYYYYY-Y-YY", height=80)
-                    firma = st.text_input("Responsable Firma", value=st.session_state.profile['full_name'])
+                    firma = st.text_input("Firma / Responsable", value=st.session_state.profile['full_name'])
                 
                 if len(date_range) == 2:
                     start_d, end_d = date_range
@@ -828,11 +835,20 @@ else:
                                     addr_str = str(cli_data.get('address', '')).strip()
                                     if addr_str == 'nan' or not addr_str: addr_str = 'Lima, Perú.'
 
-                                    # Construcción de HTML sin indentación para evitar bloques de código
+                                    # Reemplazo dinámico de parámetros
+                                    tenor_final = tenor.replace("{CLIENTE}", cli_name_sel.upper())\
+                                                       .replace("{RUC}", doi_str)\
+                                                       .replace("{DIRECCION}", addr_str)\
+                                                       .replace("{FECHA}", datetime.today().strftime('%d de %B de %Y'))\
+                                                       .replace("{PERIODO}", f"{start_d.strftime('%d.%m.%Y')} al {end_d.strftime('%d.%m.%Y')}")\
+                                                       .replace("{MONTO}", f"{total_general_liq:,.2f}")\
+                                                       .replace("{MONEDA}", moneda_liq)
+
+                                    # Construcción de HTML sin indentación
                                     carta_formal_html = f"""
 <div style="padding: 40px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.5; border: 1px solid #ddd; max-width: 800px; margin: auto;">
 <div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">
-<h2 style="margin: 0; color: #333; text-transform: uppercase;">REPORTE DE SERVICIOS PROFESIONALES</h2>
+<h2 style="margin: 0; color: #333; text-transform: uppercase;">CARTA DE PRESENTACIÓN DE SERVICIOS</h2>
 </div>
 <p style="text-align: right; margin-bottom: 40px;">Lima, {datetime.today().strftime('%d de %B de %Y')}</p>
 <div style="margin-bottom: 30px;">
@@ -845,7 +861,7 @@ else:
 <p><strong>Ref: Liquidación de Honorarios</strong><br>
 Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
 </div>
-<p style="text-align: justify; margin-bottom: 30px;">{tenor}</p>
+<p style="text-align: justify; margin-bottom: 30px; white-space: pre-wrap;">{tenor_final}</p>
 <div style="background-color: #f8f9fa; padding: 25px; text-align: center; margin: 30px 0; border: 1px solid #e9ecef; border-radius: 4px;">
 <p style="margin: 0; font-size: 0.9em; color: #666; text-transform: uppercase; letter-spacing: 1px;">MONTO TOTAL A LIQUIDAR</p>
 <h3 style="margin: 10px 0; color: #000; font-size: 1.8em;">{moneda_liq} {total_general_liq:,.2f}</h3>
@@ -870,36 +886,47 @@ Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
                                     st.subheader(f"Anexo: Detalle Técnico ({moneda_liq})")
                                     df_anexo = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
                                     
-                                    # Tabla de anexo interactiva con formato
-                                    anexo_display = df_anexo[['Fecha_str', 'profiles.full_name', 'projects.name', 'description', 'total_minutes', 'Total_Monto']].copy()
-                                    anexo_display['Tiempo'] = anexo_display['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-                                    anexo_display = anexo_display[['Fecha_str', 'profiles.full_name', 'projects.name', 'description', 'Tiempo', 'Total_Monto']]
-                                    anexo_display.columns = ['Fecha', 'Consultor', 'Proyecto', 'Actividad', 'Tiempo', 'Valor']
+                                    # Agrupar por Proyecto para el Anexo (Iterar proyectos únicos)
+                                    unique_projs = df_anexo['projects.name'].unique()
                                     
-                                    st.dataframe(
-                                        anexo_display,
-                                        column_config={"Valor": st.column_config.NumberColumn(format=f"{moneda_liq} %,.2f")},
-                                        use_container_width=True, hide_index=True
-                                    )
+                                    full_anexo_display = []
                                     
+                                    for proj in unique_projs:
+                                        st.markdown(f"#### 📁 {proj}")
+                                        df_p = df_anexo[df_anexo['projects.name'] == proj].copy()
+                                        
+                                        anexo_display = df_p[['Fecha_str', 'profiles.full_name', 'description', 'total_minutes', 'Total_Monto']].copy()
+                                        anexo_display['Tiempo'] = anexo_display['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
+                                        anexo_display = anexo_display[['Fecha_str', 'profiles.full_name', 'description', 'Tiempo', 'Total_Monto']]
+                                        anexo_display.columns = ['Fecha', 'Consultor', 'Actividad', 'Tiempo', 'Valor']
+                                        
+                                        st.dataframe(
+                                            anexo_display,
+                                            column_config={"Valor": st.column_config.NumberColumn(format=f"%.2f")},
+                                            use_container_width=True, hide_index=True
+                                        )
+                                        # Guardar para excel consolidado
+                                        df_p_clean = anexo_display.copy()
+                                        df_p_clean.insert(0, "Proyecto", proj)
+                                        full_anexo_display.append(df_p_clean)
+
                                     # Botón Excel para este reporte con manejo de errores
-                                    try:
+                                    if HAS_OPENPYXL and full_anexo_display:
+                                        df_final_excel = pd.concat(full_anexo_display)
                                         exc_io = io.BytesIO()
                                         with pd.ExcelWriter(exc_io, engine='openpyxl') as writer:
-                                            anexo_display.to_excel(writer, index=False, sheet_name='Detalle')
+                                            df_final_excel.to_excel(writer, index=False, sheet_name='Detalle')
                                         st.download_button(
                                             label="Descargar Anexo Excel 📥",
                                             data=exc_io.getvalue(),
                                             file_name=f"Anexo_{cli_name_sel}_{moneda_liq}.xlsx",
                                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                                         )
-                                    except ModuleNotFoundError:
-                                        st.warning("⚠️ Módulo Excel en preparación. Intente en unos instantes.")
-                                    except Exception as e:
-                                        st.error(f"Error al generar Anexo Excel: {e}")
+                                    elif not HAS_OPENPYXL:
+                                        st.warning("⚠️ Módulo Excel no disponible.")
 
                                 st.markdown("---")
-                                st.subheader("Dashboard Consolidado (Todas las monedas)")
+                                st.subheader("Dashboard Consolidado (Por Moneda y Usuario)")
                                 dash_data = df_rep.groupby(['profiles.full_name', 'projects.currency']).agg({
                                     'Horas_num': 'sum',
                                     'Total_Monto': 'sum'
@@ -912,9 +939,14 @@ Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
                                     'projects.currency': 'Moneda',
                                     'Total_Monto': 'Inversión'
                                 })
+                                # Ordernar: Usuario | Moneda | Tiempo | Inversión
                                 st.dataframe(
                                     dash_data[['Usuario', 'Moneda', 'Tiempo', 'Inversión']],
-                                    column_config={"Inversión": st.column_config.NumberColumn(format="%,.2f")},
+                                    column_config={
+                                        "Inversión": st.column_config.NumberColumn(format="%.2f"),
+                                        "Usuario": st.column_config.TextColumn("Usuario"),
+                                        "Moneda": st.column_config.TextColumn("Moneda"),
+                                    },
                                     use_container_width=True, hide_index=True
                                 )
                     else:
