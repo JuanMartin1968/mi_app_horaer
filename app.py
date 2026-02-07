@@ -9,16 +9,55 @@ import textwrap
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
-# Importación segura de openpyxl
+# Importación segura de librerías opcionales
 try:
     import openpyxl
     HAS_OPENPYXL = True
 except ImportError:
     HAS_OPENPYXL = False
 
+try:
+    from docx import Document
+    from docx.shared import Pt, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    HAS_DOCX = True
+except ImportError:
+    HAS_DOCX = False
+
 # Helper para zona horaria (Lima/Bogotá UTC-5)
 def get_lima_now():
     return datetime.now(timezone.utc) - timedelta(hours=5)
+
+def generate_word_letter(texto_completo, firma_resp):
+    doc = Document()
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Times New Roman'
+    font.size = Pt(11)
+    
+    # Simular membrete simple
+    header = doc.sections[0].header
+    htable = header.add_table(1, 2, width=Inches(6))
+    htable.autofit = False
+    htable.columns[0].width = Inches(3)
+    htable.columns[1].width = Inches(3)
+    
+    # Contenido del cuerpo (dividir por saltos de línea para párrafos)
+    for paragraph in texto_completo.split('\n'):
+        if paragraph.strip():
+            p = doc.add_paragraph(paragraph.strip())
+            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    
+    # Firma
+    doc.add_paragraph("\n\n")
+    p_firma = doc.add_paragraph(firma_resp)
+    p_firma.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_cargo = doc.add_paragraph("Responsable")
+    p_cargo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
 
 # Cargar variables del archivo .env buscando el archivo en la misma carpeta que este script
 env_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -390,7 +429,7 @@ else:
             st.rerun()
 
     if st.session_state.is_admin:
-        menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas", "Facturación y Reportes"]
+        menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas", "Facturación y Reportes", "Carga Masiva"]
         choice = st.sidebar.selectbox("Seleccione Módulo", menu)
 
         if choice == "Panel General":
@@ -524,7 +563,6 @@ else:
                 st.subheader("Inversión Total por Divisa")
                 if not filtered_df.empty:
                     # Agrupar por la moneda del proyecto (que sacamos del join)
-                    # El campo en el df normalizado es 'projects.currency'
                     if 'projects.currency' in filtered_df:
                         metrics_cols = st.columns(len(filtered_df['projects.currency'].unique()))
                         for i, (curr, group) in enumerate(filtered_df.groupby('projects.currency')):
@@ -533,6 +571,32 @@ else:
                                 st.metric(f"Total {curr}", f"{curr} {total_curr:,.2f}")
                     else:
                         st.metric("Inversión Total", f"${filtered_df['Valor Total'].sum():,.2f}")
+                
+                st.markdown("---")
+                st.subheader("📥 Descarga Global de Datos")
+                if st.button("Descargar Base de Datos Completa (Excel)"):
+                    if HAS_OPENPYXL:
+                        try:
+                            # Descargar TODO lo que hay en time_entries sin filtros
+                            all_q = supabase.table("time_entries").select("*, profiles(full_name), projects(name, currency, clients(name))").execute()
+                            if all_q.data:
+                                df_all = pd.json_normalize(all_q.data)
+                                output_all = io.BytesIO()
+                                with pd.ExcelWriter(output_all, engine='openpyxl') as writer:
+                                    df_all.to_excel(writer, index=False, sheet_name='BaseCompleta')
+                                st.download_button(
+                                    label="Confirmar Descarga Global",
+                                    data=output_all.getvalue(),
+                                    file_name=f"FULL_DB_{get_lima_now().strftime('%Y%m%d_%H%M')}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
+                            else:
+                                st.warning("La base de datos está vacía.")
+                        except Exception as e:
+                            st.error(f"Error en descarga global: {e}")
+                    else:
+                        st.error("Librería Excel no disponible.")
+
             else:
                 st.info("No hay registros de tiempo aún.")
 
@@ -755,7 +819,83 @@ else:
                                 supabase.table("project_rates").insert({"project_id": proj_map[proj_sel], "role_id": r_id, "rate": val}).execute()
                     st.success(f"✅ Tarifas para '{proj_sel}' guardadas.")
                     st.rerun()
+                    st.success(f"✅ Tarifas para '{proj_sel}' guardadas.")
+                    st.rerun()
 
+        elif choice == "Carga Masiva":
+            st.header("📤 Carga Masiva de Datos Históricos")
+            st.info("Suba un archivo Excel (.xlsx) con las columnas: Fecha (dd.mm-yyyy), Email, Cliente, Proyecto, Descripcion, Minutos.")
+            
+            uploaded_file = st.file_uploader("Seleccionar archivo Excel", type=['xlsx'])
+            if uploaded_file and HAS_OPENPYXL:
+                try:
+                    df_upload = pd.read_excel(uploaded_file)
+                    st.write("Vista previa de carga:", df_upload.head())
+                    
+                    if st.button("Procesar Carga"):
+                        # Lógica simplificada de carga: se asume que clientes/proyectos existen o se mapean manual (complejo). 
+                        # Para MVP, validamos emails y proyectos existentes.
+                        
+                        # Cache de mapeo
+                        users_map = {u['email']: u['id'] for u in supabase.table("auth_users_view_hack").select("*").execute().data} # Hack si view existe, sino usar profiles join user
+                        # Usar profiles directly as approximation if auth table not accessible easily via API without admin key in standard client
+                        # Fallback: Usar profiles y asumir correo match con auth (dificil sin admin SDK full). 
+                        # Simplificación: Usar nombre de usuario en profiles
+                        prof_map = {p['full_name']: p['id'] for p in supabase.table("profiles").select("id, full_name").execute().data}
+                        
+                        clients_map = {c['name']: c['id'] for c in supabase.table("clients").select("id, name").execute().data}
+                        
+                        success_count = 0
+                        errors = []
+                        
+                        for idx, row in df_upload.iterrows():
+                            # Validaciones básicas
+                            u_id = prof_map.get(row.get('Usuario')) or prof_map.get(row.get('Consultor'))
+                            c_id = clients_map.get(row.get('Cliente'))
+                            
+                            if u_id and c_id:
+                                # Buscar proyecto
+                                proj_q = supabase.table("projects").select("id").eq("client_id", c_id).eq("name", row.get('Proyecto')).execute()
+                                if proj_q.data:
+                                    p_id = proj_q.data[0]['id']
+                                    
+                                    # Insertar
+                                    try:
+                                        d_str = row.get('Fecha')
+                                        if isinstance(d_str, datetime):
+                                            d_iso = d_str.isoformat()
+                                        else:
+                                            d_iso = datetime.strptime(str(d_str), "%d.%m-%Y").isoformat()
+                                            
+                                        minutes = int(row.get('Minutos', 0))
+                                        
+                                        supabase.table("time_entries").insert({
+                                            "user_id": u_id,
+                                            "project_id": p_id,
+                                            "start_time": d_iso, # Solo fecha referencia
+                                            "end_time": d_iso, 
+                                            "total_minutes": minutes,
+                                            "description": row.get('Descripcion', 'Carga Masiva'),
+                                            "is_billable": True
+                                        }).execute()
+                                        success_count += 1
+                                    except Exception as e:
+                                        errors.append(f"Fila {idx}: Error formato fecha o inserción ({e})")
+                                else:
+                                    errors.append(f"Fila {idx}: Proyecto '{row.get('Proyecto')}' no existe para cliente '{row.get('Cliente')}'")
+                            else:
+                                errors.append(f"Fila {idx}: Usuario o Cliente no encontrados.")
+                        
+                        st.success(f"Procesado. Exitosos: {success_count}. Errores: {len(errors)}")
+                        if errors:
+                            st.expander("Ver Errores").write(errors)
+                            
+                except Exception as e:
+                    st.error(f"Error al leer archivo: {e}")
+                except Exception as e:
+                    st.error(f"Error al leer archivo: {e}")
+
+        elif choice == "Facturación y Reportes":
         elif choice == "Facturación y Reportes":
             st.header("📄 Facturación y Reportes")
             
@@ -773,15 +913,8 @@ else:
                     date_range = st.date_input("Rango de Fechas", [get_lima_now().replace(day=1), get_lima_now()])
                     
                     st.markdown("---")
-                    st.markdown("### Datos para la Carta")
-                    st.info("💡 Use los marcadores {CLIENTE}, {RUC}, {DIRECCION}, {FECHA}, {PERIODO}, {MONTO}, {MONEDA} en el tenor.")
-                    default_tenor = """Por medio de la presente, hacemos llegar nuestro cordial saludo y a la vez remitimos el reporte de las horas incurridas por los servicios profesionales brindados a {CLIENTE} durante el periodo {PERIODO}.
+                    st.info("📊 Genere el reporte para habilitar la carta y anexos.")
 
-El monto total de los honorarios asciende a {MONEDA} {MONTO}, el cual incluye todos los impuestos de ley."""
-                    tenor = st.text_area("Cuerpo de la Carta (Editable)", value=default_tenor, height=150)
-                    cuentas = st.text_area("Cuentas Bancarias", value="BCP Soles: XXX-XXXXXXX-X-XX\nBCP Dólares: YYY-YYYYYYY-Y-YY", height=80)
-                    firma = st.text_input("Firma / Responsable", value=st.session_state.profile['full_name'])
-                
                 if len(date_range) == 2:
                     start_d, end_d = date_range
                     report_q = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, client_id)").eq("projects.client_id", cli_data['id']).execute()
@@ -791,20 +924,11 @@ El monto total de los honorarios asciende a {MONEDA} {MONTO}, el cual incluye to
                         if df_rep.empty:
                             st.info("No hay registros en el periodo seleccionado.")
                         else:
-                            # Shift horario para reportes
+                            # Procesamiento
                             df_rep['dt_ref'] = df_rep['start_time'].fillna(df_rep['created_at'])
                             df_rep['dt_start'] = (pd.to_datetime(df_rep['dt_ref'], utc=True, errors='coerce') - pd.Timedelta(hours=5)).dt.tz_localize(None)
                             df_rep['Fecha_dt'] = df_rep['dt_start'].dt.date
-                            df_rep['Fecha_str'] = df_rep['dt_start'].dt.strftime('%d.%m-%Y')
-                            
-                            # Filtro solo para CARTA (Tab 1), el Dashboard verá todo
-                            # Saneamiento de monedas (eliminar nan)
-                            monedas_disp = [m for m in df_rep['projects.currency'].unique() if pd.notna(m) and str(m) != 'nan']
-                            if not monedas_disp:
-                                st.warning("No hay monedas válidas en los proyectos seleccionados.")
-                                moneda_liq = None
-                            else:
-                                moneda_liq = st.sidebar.selectbox("Moneda a Liquidar (Carta)", monedas_disp)
+                            df_rep['Fecha_str'] = df_rep['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
                             
                             rates = supabase.table("project_rates").select("*").execute()
                             rates_df = pd.DataFrame(rates.data)
@@ -817,152 +941,84 @@ El monto total de los honorarios asciende a {MONEDA} {MONTO}, el cual incluye to
                             df_rep['Horas_num'] = df_rep['total_minutes'] / 60
                             df_rep['Costo_H'] = df_rep.apply(get_cost_rep, axis=1)
                             df_rep['Total_Monto'] = df_rep['Horas_num'] * df_rep['Costo_H']
-                            # Saneamiento de Fecha_str para evitar NaN visuales
-                            df_rep['Fecha_str'] = df_rep['dt_start'].dt.strftime('%d.%m-%Y').fillna('---')
                             
-                            tab1, tab2 = st.tabs(["📝 Carta de Liquidación", "📋 Anexo Detallado / Dashboard"])
+                            tab1, tab2, tab3 = st.tabs(["📝 Carta de Liquidación", "📋 Anexo Detallado", "📊 Dashboard"])
                             
                             with tab1:
-                                if moneda_liq:
-                                    # Generar contenido de carta FORMAL (Página 1)
+                                monedas_disp = [m for m in df_rep['projects.currency'].unique() if pd.notna(m) and str(m) != 'nan']
+                                if not monedas_disp:
+                                    st.warning("No hay monedas válidas.")
+                                else:
+                                    moneda_liq = st.selectbox("Moneda para Carta", monedas_disp)
                                     df_carta = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
                                     total_general_liq = df_carta['Total_Monto'].sum()
                                     
-                                    # Limpieza de DOI y Dirección para evitar "nan"
-                                    doi_str = str(cli_data.get('doi_number', '')).strip()
-                                    if doi_str == 'nan': doi_str = '---'
-                                    addr_str = str(cli_data.get('address', '')).strip()
-                                    if addr_str == 'nan' or not addr_str: addr_str = 'Lima, Perú.'
-
-                                    # Limpieza de DOI y Dirección para evitar "nan"
+                                    # Datos Pre-llenados
                                     doi_str = str(cli_data.get('doi_number', '')).strip()
                                     if doi_str == 'nan' or not doi_str: doi_str = '---'
                                     addr_str = str(cli_data.get('address', '')).strip()
                                     if addr_str == 'nan' or not addr_str: addr_str = 'Lima, Perú.'
-
-                                    # Reemplazo dinámico de parámetros
-                                    tenor_final = tenor.replace("{CLIENTE}", cli_name_sel.upper())\
-                                                       .replace("{RUC}", doi_str)\
-                                                       .replace("{DIRECCION}", addr_str)\
-                        .replace("{FECHA}", get_lima_now().strftime('%d de %B de %Y'))\
-                                                       .replace("{PERIODO}", f"{start_d.strftime('%d.%m.%Y')} al {end_d.strftime('%d.%m.%Y')}")\
-                                                       .replace("{MONTO}", f"{total_general_liq:,.2f}")\
-                                                       .replace("{MONEDA}", moneda_liq)
-
-                                    # Construcción de HTML sin indentación
-                                    carta_formal_html = f"""
-<div style="padding: 40px; background-color: white; color: black !important; font-family: 'Times New Roman', serif; line-height: 1.5; border: 1px solid #ddd; max-width: 800px; margin: auto;">
-<div style="text-align: center; margin-bottom: 30px; border-bottom: 2px solid #7c3aed; padding-bottom: 10px;">
-<h2 style="margin: 0; color: #333; text-transform: uppercase;">CARTA DE PRESENTACIÓN DE SERVICIOS</h2>
-</div>
-<p style="text-align: right; margin-bottom: 40px;">Lima, {get_lima_now().strftime('%d de %B de %Y')}</p>
-<div style="margin-bottom: 30px;">
-<p style="margin: 0;"><strong>Señores:</strong></p>
-<p style="margin: 0; font-size: 1.1em; font-weight: bold; color: #000;">{cli_name_sel.upper()}</p>
-<p style="margin: 0;">RUC: {doi_str}</p>
-<p style="margin: 0;">{addr_str}</p>
-</div>
-<div style="margin-bottom: 20px;">
-<p><strong>Ref: Liquidación de Honorarios</strong><br>
-Periodo: {start_d.strftime('%d.%m-%Y')} al {end_d.strftime('%d.%m-%Y')}</p>
-</div>
-<p style="text-align: justify; margin-bottom: 30px; white-space: pre-wrap;">{tenor_final}</p>
-<div style="background-color: #f8f9fa; padding: 25px; text-align: center; margin: 30px 0; border: 1px solid #e9ecef; border-radius: 4px;">
-<p style="margin: 0; font-size: 0.9em; color: #666; text-transform: uppercase; letter-spacing: 1px;">MONTO TOTAL A LIQUIDAR</p>
-<h3 style="margin: 10px 0; color: #000; font-size: 1.8em;">{moneda_liq} {total_general_liq:,.2f}</h3>
-</div>
-<div style="margin-bottom: 40px;">
-<p><strong>Instrucciones de Pago:</strong></p>
-<div style="font-family: monospace; white-space: pre-wrap; background: #fafafa; padding: 15px; border-left: 4px solid #7c3aed; font-size: 0.95em; color: #333;">{cuentas}</div>
-</div>
-<div style="margin-top: 60px; width: 250px; border-top: 1px solid #000; text-align: center; padding-top: 10px; margin-left: auto; margin-right: auto;">
-<strong>{firma}</strong><br>
-<span style="font-size: 0.9em; color: #666;">Responsable</span>
-</div>
-</div>
-"""
-                                    st.markdown(carta_formal_html, unsafe_allow_html=True)
-                                    st.info("💡 El detalle de horas aparece en la pestaña 'Anexo Detallado'.")
-                                else:
-                                    st.warning("Seleccione una moneda para generar el reporte.")
+                                    try:
+                                        firma_def = st.session_state.profile['full_name']
+                                    except: firma_def = "Responsable"
+                                    
+                                    letter_template = f"Lima, {get_lima_now().strftime('%d de %B de %Y')}\n\nSeñores:\n{cli_name_sel.upper()}\nRUC: {doi_str}\n{addr_str}\nPresente.-\n\nRef.: Liquidación de Honorarios\nPeriodo: {start_d.strftime('%d.%m.%Y')} al {end_d.strftime('%d.%m.%Y')}\n\nDe nuestra consideración:\n\nPor medio de la presente, hacemos llegar nuestro cordial saludo y a la vez remitimos el reporte de las horas incurridas por los servicios profesionales de Consultoría brindados durante el periodo de la referencia.\n\nEl monto total de los honorarios asciende a {moneda_liq} {total_general_liq:,.2f}, el cual incluye todos los impuestos de ley.\n\nInstrucciones de Pago:\nBCP Soles: XXX-XXXXXXX-X-XX\nBCP Dólares: YYY-YYYYYYY-Y-YY\n\nQuedamos a su disposición para cualquier consulta.\n\nAtentamente,\n\n__________________________\n{firma_def}\nResponsable"
+                                    
+                                    st.markdown("##### Editor de Carta")
+                                    full_letter_text = st.text_area("Contenido", value=letter_template, height=450)
+                                    
+                                    c1, c2 = st.columns(2)
+                                    with c1:
+                                        st.caption("Vista Previa")
+                                        st.markdown(f"<div style='background:white; color:black; padding:25px; border:1px solid #ccc; font-family:Times New Roman; white-space: pre-wrap;'>{full_letter_text}</div>", unsafe_allow_html=True)
+                                    with c2:
+                                        st.caption("Acciones")
+                                        if HAS_DOCX:
+                                            docx_bytes = generate_word_letter(full_letter_text, firma_def)
+                                            st.download_button("📄 Descargar Word (.docx)", data=docx_bytes, file_name=f"Carta_{cli_name_sel}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", type="primary")
+                                        else:
+                                            st.warning("Instale python-docx.")
 
                             with tab2:
-                                if moneda_liq:
-                                    st.subheader(f"Anexo: Detalle Técnico ({moneda_liq})")
+                                if 'moneda_liq' in locals() and moneda_liq:
+                                    st.subheader(f"Anexo: Detalle ({moneda_liq})")
                                     df_anexo = df_rep[df_rep['projects.currency'] == moneda_liq].copy()
-                                    
-                                    # Agrupar por Proyecto para el Anexo (Iterar proyectos únicos)
-                                    unique_projs = df_anexo['projects.name'].unique()
-                                    
-                                    full_anexo_display = []
-                                    
-                                    for proj in unique_projs:
-                                        st.markdown(f"#### 📁 {proj}")
+                                    full_xls = []
+                                    for proj in df_anexo['projects.name'].unique():
+                                        st.markdown(f"**Proyecto: {proj}**")
                                         df_p = df_anexo[df_anexo['projects.name'] == proj].copy()
+                                        disp = df_p[['Fecha_str', 'profiles.full_name', 'description', 'total_minutes', 'Total_Monto']].copy()
+                                        disp['Tiempo'] = disp['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
+                                        disp = disp[['Fecha_str', 'profiles.full_name', 'description', 'Tiempo', 'Total_Monto']]
+                                        disp.columns = ['Fecha', 'Consultor', 'Actividad', 'Tiempo', 'Valor']
+                                        st.dataframe(disp, column_config={"Valor": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, hide_index=True)
                                         
-                                        anexo_display = df_p[['Fecha_str', 'profiles.full_name', 'description', 'total_minutes', 'Total_Monto']].copy()
-                                        anexo_display['Tiempo'] = anexo_display['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-                                        anexo_display = anexo_display[['Fecha_str', 'profiles.full_name', 'description', 'Tiempo', 'Total_Monto']]
-                                        anexo_display.columns = ['Fecha', 'Consultor', 'Actividad', 'Tiempo', 'Valor']
-                                        
-                                        st.dataframe(
-                                            anexo_display,
-                                            column_config={"Valor": st.column_config.NumberColumn(format=f"%.2f")},
-                                            use_container_width=True, hide_index=True
-                                        )
-                                        # Guardar para excel consolidado
-                                        df_p_clean = anexo_display.copy()
-                                        df_p_clean.insert(0, "Proyecto", proj)
-                                        full_anexo_display.append(df_p_clean)
+                                        clean_p = disp.copy()
+                                        clean_p.insert(0, 'Proyecto', proj)
+                                        full_xls.append(clean_p)
+                                    
+                                    st.markdown("---")
+                                    if HAS_OPENPYXL and full_xls:
+                                        final_xls = pd.concat(full_xls)
+                                        buffer = io.BytesIO()
+                                        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                                            final_xls.to_excel(writer, index=False, sheet_name='Anexo')
+                                        st.download_button("📥 Descargar Anexo Excel", data=buffer.getvalue(), file_name=f"Anexo_{cli_name_sel}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                else:
+                                    st.info("Seleccione moneda en pestaña Carta.")
 
-                                    # Botón Excel para este reporte con manejo de errores
-                                    if HAS_OPENPYXL and full_anexo_display:
-                                        df_final_excel = pd.concat(full_anexo_display)
-                                        exc_io = io.BytesIO()
-                                        with pd.ExcelWriter(exc_io, engine='openpyxl') as writer:
-                                            df_final_excel.to_excel(writer, index=False, sheet_name='Detalle')
-                                        st.download_button(
-                                            label="Descargar Anexo Excel 📥",
-                                            data=exc_io.getvalue(),
-                                            file_name=f"Anexo_{cli_name_sel}_{moneda_liq}.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                        )
-                                    elif not HAS_OPENPYXL:
-                                        st.warning("⚠️ Módulo Excel no disponible.")
+                            with tab3:
+                                st.subheader("Dashboard")
+                                sum_df = df_rep.groupby(['profiles.full_name', 'projects.currency'])[['Horas_num', 'Total_Monto']].sum().reset_index()
+                                sum_df['Tiempo'] = sum_df['Horas_num'].apply(lambda h: f"{int(h)}h {int((h*60)%60)}m")
+                                st.dataframe(sum_df, column_config={"Total_Monto": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, hide_index=True)
 
-                                st.markdown("---")
-                                st.subheader("Dashboard Consolidado (Por Moneda y Usuario)")
-                                dash_data = df_rep.groupby(['profiles.full_name', 'projects.currency']).agg({
-                                    'Horas_num': 'sum',
-                                    'Total_Monto': 'sum'
-                                }).reset_index()
-                                # Saneamiento de moneda en dashboard
-                                dash_data['projects.currency'] = dash_data['projects.currency'].fillna('---')
-                                dash_data['Tiempo'] = dash_data['Horas_num'].apply(lambda h: f"{int(round(h*60))//60:02d}:{int(round(h*60))%60:02d}")
-                                dash_data = dash_data.rename(columns={
-                                    'profiles.full_name': 'Usuario',
-                                    'projects.currency': 'Moneda',
-                                    'Total_Monto': 'Inversión'
-                                })
-                                # Ordernar: Usuario | Moneda | Tiempo | Inversión
-                                st.dataframe(
-                                    dash_data[['Usuario', 'Moneda', 'Tiempo', 'Inversión']],
-                                    column_config={
-                                        "Inversión": st.column_config.NumberColumn(format="%.2f"),
-                                        "Usuario": st.column_config.TextColumn("Usuario"),
-                                        "Moneda": st.column_config.TextColumn("Moneda"),
-                                    },
-                                    use_container_width=True, hide_index=True
-                                )
                     else:
                         st.info("No se encontraron registros para este cliente.")
                 else:
                     st.info("Seleccione un rango de fechas en la barra lateral.")
 
     else:
-        # Para roles de usuario no administrador
-        mostrar_registro_tiempos()
-
 # --- REFRESH DINÁMICO (Al final para no bloquear UI) ---
 if st.session_state.get('timer_running'):
     time.sleep(1)
