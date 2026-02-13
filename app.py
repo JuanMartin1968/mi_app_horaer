@@ -196,6 +196,10 @@ def mostrar_registro_tiempos():
         st.write(f"Usuario: **{st.session_state.profile['full_name']}**")
 
     # VALIDACIÓN DE TARIFA
+    if not target_user_id:
+        st.warning("Sesión no válida o usuario no detectado. Por favor, inicie sesión nuevamente.")
+        return
+
     profile_info = supabase.table("profiles").select("role_id").eq("id", target_user_id).single().execute()
     role_id = profile_info.data['role_id']
     rate_q = supabase.table("project_rates").select("rate").eq("project_id", p_id).eq("role_id", role_id).execute()
@@ -253,66 +257,132 @@ def mostrar_registro_tiempos():
             except ValueError:
                 st.error("Formato inválido. Use HH:mm (ej: 08:33)")
 
-    # 3. CRONÓMETRO
+    # 3. CRONÓMETRO (Persistente)
     with col2:
         st.subheader("⏱️ Cronómetro")
         if 'timer_running' not in st.session_state: st.session_state.timer_running = False
         if 'timer_start' not in st.session_state: st.session_state.timer_start = None
         if 'total_elapsed' not in st.session_state: st.session_state.total_elapsed = 0
+        if 'active_timer_id' not in st.session_state: st.session_state.active_timer_id = None
+
+        # Sincronización inicial con la base de datos (solo una vez por sesión o si no hay timer local)
+        if st.session_state.active_timer_id is None and st.session_state.user:
+            try:
+                timer_q = supabase.table("active_timers").select("*").eq("user_id", st.session_state.user.id).execute()
+                if timer_q.data:
+                    t_data = timer_q.data[0]
+                    st.session_state.active_timer_id = t_data['id']
+                    st.session_state.timer_running = t_data['is_running']
+                    st.session_state.timer_start = pd.to_datetime(t_data['start_time']).replace(tzinfo=None)
+                    st.session_state.total_elapsed = t_data['total_elapsed_seconds']
+                    # Si el proyecto coincide, lo usamos. Si no, avisamos?
+                    # Por simplicidad, asumimos que el usuario lo retoma en el mismo contexto o lo finaliza.
+            except Exception as e:
+                st.error(f"Error sincronizando cronómetro: {str(e)}")
 
         if st.session_state.timer_running:
-            actual_elapsed = st.session_state.total_elapsed + (datetime.now() - st.session_state.timer_start).total_seconds()
+            # Calculamos tiempo transcurrido total: acumulado previo + (ahora - inicio actual)
+            # Usar UTC para cálculos de tiempo precisos
+            now_utc = datetime.now()
+            actual_elapsed = st.session_state.total_elapsed + (now_utc - st.session_state.timer_start).total_seconds()
+            
             hrs, rem = divmod(int(actual_elapsed), 3600)
             mins, secs = divmod(rem, 60)
             st.metric("En vivo", f"{hrs:02d}:{mins:02d}:{secs:02d}")
 
-            if st.button("⏸️ Pausar"):
-                st.session_state.total_elapsed += (datetime.now() - st.session_state.timer_start).total_seconds()
-                st.session_state.timer_running = False
-                st.rerun()
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
+                if st.button("⏸️ Pausar"):
+                    new_elapsed = st.session_state.total_elapsed + (datetime.now() - st.session_state.timer_start).total_seconds()
+                    st.session_state.total_elapsed = new_elapsed
+                    st.session_state.timer_running = False
+                    # Actualizar DB
+                    if st.session_state.active_timer_id:
+                        supabase.table("active_timers").update({
+                            "is_running": False,
+                            "total_elapsed_seconds": int(new_elapsed)
+                        }).eq("id", st.session_state.active_timer_id).execute()
+                    st.rerun()
             
-            if st.button("⏹️ Finalizar y Guardar", disabled=not can_register):
-                t_start = st.session_state.timer_start
-                t_now = datetime.now()
-                total_sec = st.session_state.total_elapsed + (t_now - t_start).total_seconds()
-                total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
-                
-                tz_local = timezone(timedelta(hours=-5))
-                start_dt = datetime.combine(fecha_sel, t_start.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
-                end_dt = datetime.combine(fecha_sel, t_now.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
-                
-                if total_min == 1 and start_dt.strftime('%H:%M') == end_dt.strftime('%H:%M'):
-                    end_dt = start_dt + timedelta(minutes=1)
-                
-                supabase.table("time_entries").insert({
-                    "profile_id": target_user_id,
-                    "project_id": p_id,
-                    "description": descripcion,
-                    "start_time": start_dt.isoformat(),
-                    "end_time": end_dt.isoformat(),
-                    "total_minutes": total_min,
-                    "is_billable": es_facturable
-                }).execute()
-                
-                st.session_state.timer_running = False
-                st.session_state.total_elapsed = 0
-                st.session_state.timer_start = None
-                st.session_state.success_msg = "✅ Registro con cronómetro guardado exitosamente."
-                st.session_state.form_key_suffix += 1
-                st.rerun()
+            with col_t2:
+                if st.button("⏹️ Finalizar", disabled=not can_register):
+                    t_now = datetime.now()
+                    total_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
+                    total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
+                    
+                    tz_local = timezone(timedelta(hours=-5))
+                    # Ajustar tiempos para guardado
+                    # Si no tenemos el inicio original exacto, usamos el inicio del timer actual
+                    t_start_local = st.session_state.timer_start - timedelta(seconds=st.session_state.total_elapsed)
+                    
+                    start_dt = datetime.combine(fecha_sel, t_start_local.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                    end_dt = start_dt + timedelta(minutes=total_min)
+                    
+                    supabase.table("time_entries").insert({
+                        "profile_id": target_user_id,
+                        "project_id": p_id,
+                        "description": descripcion,
+                        "start_time": start_dt.isoformat(),
+                        "end_time": end_dt.isoformat(),
+                        "total_minutes": total_min,
+                        "is_billable": es_facturable
+                    }).execute()
+                    
+                    # Limpiar DB
+                    if st.session_state.active_timer_id:
+                        supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
+
+                    st.session_state.timer_running = False
+                    st.session_state.total_elapsed = 0
+                    st.session_state.timer_start = None
+                    st.session_state.active_timer_id = None
+                    st.session_state.success_msg = "✅ Registro persistente guardado exitosamente."
+                    st.session_state.form_key_suffix += 1
+                    st.rerun()
         else:
             if st.session_state.total_elapsed > 0:
                 hrs, rem = divmod(int(st.session_state.total_elapsed), 3600)
                 mins, secs = divmod(rem, 60)
                 st.metric("Pausado", f"{hrs:02d}:{mins:02d}:{secs:02d}")
-                if st.button("▶️ Continuar"):
-                    st.session_state.timer_start = datetime.now()
-                    st.session_state.timer_running = True
-                    st.rerun()
+                col_p1, col_p2 = st.columns(2)
+                with col_p1:
+                    if st.button("▶️ Continuar"):
+                        st.session_state.timer_start = datetime.now()
+                        st.session_state.timer_running = True
+                        # Actualizar DB
+                        if st.session_state.active_timer_id:
+                            supabase.table("active_timers").update({
+                                "is_running": True,
+                                "start_time": st.session_state.timer_start.isoformat()
+                            }).eq("id", st.session_state.active_timer_id).execute()
+                        st.rerun()
+                with col_p2:
+                    if st.button("🗑️ Descartar"):
+                        if st.session_state.active_timer_id:
+                            supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
+                        st.session_state.timer_running = False
+                        st.session_state.total_elapsed = 0
+                        st.session_state.timer_start = None
+                        st.session_state.active_timer_id = None
+                        st.rerun()
             else:
-                if st.button("▶️ Iniciar", disabled=not can_register):
+                if st.button("▶️ Iniciar Cronómetro", disabled=not can_register):
                     st.session_state.timer_start = datetime.now()
                     st.session_state.timer_running = True
+                    # Crear en DB
+                    try:
+                        resp = supabase.table("active_timers").insert({
+                            "user_id": st.session_state.user.id,
+                            "project_id": p_id,
+                            "start_time": st.session_state.timer_start.isoformat(),
+                            "description": descripcion,
+                            "is_billable": es_facturable,
+                            "is_running": True
+                        }).execute()
+                        if resp.data:
+                            st.session_state.active_timer_id = resp.data[0]['id']
+                    except Exception as e:
+                        st.error(f"Error iniciando cronómetro: {str(e)}")
                     st.rerun()
 
     # 4. TABLA DE HISTORIAL (Diferenciada por rol)
@@ -320,7 +390,7 @@ def mostrar_registro_tiempos():
     st.subheader("📋 Historial de Horas")
     
     # Query base
-    query = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, clients(name))").order("created_at", desc=True)
+    query = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, clients(name))").order("start_time", desc=True)
     if not st.session_state.is_admin:
         query = query.eq("profile_id", st.session_state.user.id)
     
@@ -439,7 +509,7 @@ else:
             st.header("📊 Panel General de Horas")
             
             # Query base (Admin ve todo)
-            entries_q = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, clients(name))").order("created_at", desc=True)
+            entries_q = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, clients(name))").order("start_time", desc=True)
             entries = entries_q.execute()
             rates = supabase.table("project_rates").select("*").execute()
             
@@ -1185,7 +1255,35 @@ else:
                                         if liquidation_number:
                                             ref_line = f"Ref.: Liquidación de Honorarios N° {liquidation_number}"
                                         
-                                        letter_template = f"Lima, {get_lima_now().strftime('%d de %B de %Y')}\n\nSeñores:\n{cli_name_sel.upper()}\nRUC: {doi_str}\n{addr_str}\nPresente.-\n\n{ref_line}\nPeriodo: {start_d.strftime('%d.%m.%Y')} al {end_d.strftime('%d.%m.%Y')}\n\nDe nuestra consideración:\n\nPor medio de la presente, hacemos llegar nuestro cordial saludo y a la vez remitimos el reporte de las horas incurridas por los servicios profesionales de Consultoría brindados durante el periodo de la referencia.\n\nEl monto total de los honorarios asciende a {moneda_liq} {total_general_liq:,.2f}, el cual incluye todos los impuestos de ley.{seccion_notas}\n\nInstrucciones de Pago:\nBCP Soles: XXX-XXXXXXX-X-XX\nBCP Dólares: YYY-YYYYYYY-Y-YY\n\nQuedamos a su disposición para cualquier consulta.\n\nAtentamente,\n\n__________________________\n{firma_def}\nResponsable"
+                                        # Plantilla de Carta basada en PDF Hoja 1
+                                        fecha_carta = get_lima_now().strftime('%d de %B de %Y')
+                                        
+                                        letter_template = f"""San Isidro, {fecha_carta}
+
+Señor(es):
+{cli_name_sel.upper()}
+Presente.-
+
+Estimado(s) señor(es):
+
+Nos dirigimos a usted(es) con el propósito de saludarlo(s) cordialmente y remitir la {ref_line}, por la suma neta de {moneda_liq} {total_general_liq:,.2f}, más el Impuesto General a las Ventas.
+
+El detalle de las actividades efectivamente ejecutadas a favor de usted(es) se encuentra consignado en la liquidación de horas que se adjunta a esta comunicación. En tal sentido, agradeceremos se sirvan revisar detenidamente la información anexada.{seccion_notas}
+
+Para el pago de los honorarios y de la respectiva detracción, sírvanse tener en cuenta los siguientes datos:
+
+**Pago Detracciones:** Banco de la Nación
+Cuenta corriente Soles N° 00-005-337240
+
+**Pago Honorarios:** 
+[BANCO] [TIPO CUENTA] 
+N° [NUMERO DE CUENTA]
+
+Atentamente,
+
+__________________________
+{firma_def}
+Responsable"""
                                         
                                         st.markdown("##### Editor de Carta")
                                         full_letter_text = st.text_area("Contenido", value=letter_template, height=450)
