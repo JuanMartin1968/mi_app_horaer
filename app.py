@@ -906,19 +906,22 @@ else:
                 st.info("📋 **Formato requerido**: Fecha | Responsable | Cliente | Proyecto | Detalle | Hora Inicio | Hora Final")
                 
                 # Botón para descargar template
-                template_time = pd.DataFrame({
-                    'Fecha': ['06.02-2026', '06.02-2026'],
-                    'Responsable': ['Juan Pérez', 'María García'],
-                    'Cliente': ['Cliente A', 'Cliente B'],
-                    'Proyecto': ['Proyecto X', 'Proyecto Y'],
-                    'Detalle': ['Reunión de planificación', 'Desarrollo de módulo'],
-                    'Hora Inicio': ['09:00', '14:00'],
-                    'Hora Final': ['11:30', '17:00']
-                })
-                buffer_template = io.BytesIO()
-                with pd.ExcelWriter(buffer_template, engine='openpyxl') as writer:
-                    template_time.to_excel(writer, index=False, sheet_name='Registros')
-                st.download_button("📥 Descargar Template", data=buffer_template.getvalue(), file_name="template_registros.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                if HAS_OPENPYXL:
+                    template_time = pd.DataFrame({
+                        'Fecha': ['06.02-2026', '06.02-2026'],
+                        'Responsable': ['Juan Pérez', 'María García'],
+                        'Cliente': ['Cliente A', 'Cliente B'],
+                        'Proyecto': ['Proyecto X', 'Proyecto Y'],
+                        'Detalle': ['Reunión de planificación', 'Desarrollo de módulo'],
+                        'Hora Inicio': ['09:00', '14:00'],
+                        'Hora Final': ['11:30', '17:00']
+                    })
+                    buffer_template = io.BytesIO()
+                    with pd.ExcelWriter(buffer_template, engine='openpyxl') as writer:
+                        template_time.to_excel(writer, index=False, sheet_name='Registros')
+                    st.download_button("📥 Descargar Template", data=buffer_template.getvalue(), file_name="template_registros.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    st.warning("⚠️ La función de descarga de templates requiere 'openpyxl'. Por favor, instálela.")
                 
                 uploaded_file = st.file_uploader("Seleccionar archivo Excel", type=['xlsx'], key="upload_time")
                 if uploaded_file and HAS_OPENPYXL:
