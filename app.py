@@ -161,7 +161,13 @@ def mostrar_registro_tiempos():
         return
         
     client_map = {c['name']: c['id'] for c in clientes.data}
-    cliente_sel = st.selectbox("Seleccionar Cliente", ["---"] + list(client_map.keys()), key=f"cli_{st.session_state.form_key_suffix}")
+    
+    # Recuperar cliente del timer activo si existe
+    index_cliente = 0
+    if 'active_client_name' in st.session_state and st.session_state.active_client_name in client_map:
+        index_cliente = (list(client_map.keys()).index(st.session_state.active_client_name)) + 1
+
+    cliente_sel = st.selectbox("Seleccionar Cliente", ["---"] + list(client_map.keys()), index=index_cliente, key=f"cli_{st.session_state.form_key_suffix}")
     
     if cliente_sel == "---": return
 
@@ -172,7 +178,12 @@ def mostrar_registro_tiempos():
         
     proj_map = {p['name']: p['id'] for p in proyectos.data}
     proj_currency = {p['id']: p['currency'] for p in proyectos.data}
-    proyecto_sel = st.selectbox("Seleccionar Proyecto", list(proj_map.keys()), key=f"pro_{st.session_state.form_key_suffix}")
+    
+    index_proj = 0
+    if 'active_project_name' in st.session_state and st.session_state.active_project_name in proj_map:
+        index_proj = list(proj_map.keys()).index(st.session_state.active_project_name)
+
+    proyecto_sel = st.selectbox("Seleccionar Proyecto", list(proj_map.keys()), index=index_proj, key=f"pro_{st.session_state.form_key_suffix}")
     # Variables para alcance (Scope)
     # Variables para alcance (Scope)
     target_user_id = st.session_state.user.id
@@ -215,8 +226,12 @@ def mostrar_registro_tiempos():
             st.success(f"Tarifa detectada: **{current_rate_val} {moneda}/h**")
         can_register = True
 
-    descripcion = st.text_area("Detalle del trabajo", placeholder="¿Qué hiciste?", key=f"desc_{st.session_state.form_key_suffix}")
-    es_facturable = st.checkbox("¿Es facturable?", value=True, key=f"fact_{st.session_state.form_key_suffix}")
+    # Valor por defecto para descripción y facturabilidad
+    def_desc = st.session_state.get('active_timer_description', '')
+    def_fact = st.session_state.get('active_timer_billable', True)
+
+    descripcion = st.text_area("Detalle del trabajo", value=def_desc, placeholder="¿Qué hiciste?", key=f"desc_{st.session_state.form_key_suffix}")
+    es_facturable = st.checkbox("¿Es facturable?", value=def_fact, key=f"fact_{st.session_state.form_key_suffix}")
     
     st.markdown("---")
     col1, col2 = st.columns(2)
@@ -268,23 +283,28 @@ def mostrar_registro_tiempos():
         # Sincronización inicial con la base de datos (solo una vez por sesión o si no hay timer local)
         if st.session_state.active_timer_id is None and st.session_state.user:
             try:
-                timer_q = supabase.table("active_timers").select("*").eq("user_id", st.session_state.user.id).execute()
+                # Query expandida para obtener nombres de cliente/proyecto
+                timer_q = supabase.table("active_timers").select("*, projects(name, client_id, clients(name))").eq("user_id", st.session_state.user.id).execute()
                 if timer_q.data:
                     t_data = timer_q.data[0]
                     st.session_state.active_timer_id = t_data['id']
                     st.session_state.timer_running = t_data['is_running']
                     st.session_state.timer_start = pd.to_datetime(t_data['start_time']).replace(tzinfo=None)
                     st.session_state.total_elapsed = t_data['total_elapsed_seconds']
-                    # Si el proyecto coincide, lo usamos. Si no, avisamos?
-                    # Por simplicidad, asumimos que el usuario lo retoma en el mismo contexto o lo finaliza.
+                    # Persistencia de formulario
+                    st.session_state.active_project_name = t_data['projects']['name']
+                    st.session_state.active_client_name = t_data['projects']['clients']['name']
+                    st.session_state.active_timer_description = t_data.get('description', '')
+                    st.session_state.active_timer_billable = t_data.get('is_billable', True)
+                    st.rerun() # Rerun para que los selectores se actualicen con los nuevos índices
             except Exception as e:
                 st.error(f"Error sincronizando cronómetro: {str(e)}")
 
         if st.session_state.timer_running:
             # Calculamos tiempo transcurrido total: acumulado previo + (ahora - inicio actual)
-            # Usar UTC para cálculos de tiempo precisos
-            now_utc = datetime.now()
-            actual_elapsed = st.session_state.total_elapsed + (now_utc - st.session_state.timer_start).total_seconds()
+            # Usar hora local de Lima para cálculos
+            now_lima = get_lima_now().replace(tzinfo=None)
+            actual_elapsed = st.session_state.total_elapsed + (now_lima - st.session_state.timer_start).total_seconds()
             
             hrs, rem = divmod(int(actual_elapsed), 3600)
             mins, secs = divmod(rem, 60)
@@ -293,20 +313,22 @@ def mostrar_registro_tiempos():
             col_t1, col_t2 = st.columns(2)
             with col_t1:
                 if st.button("⏸️ Pausar"):
-                    new_elapsed = st.session_state.total_elapsed + (datetime.now() - st.session_state.timer_start).total_seconds()
+                    new_elapsed = st.session_state.total_elapsed + (get_lima_now().replace(tzinfo=None) - st.session_state.timer_start).total_seconds()
                     st.session_state.total_elapsed = new_elapsed
                     st.session_state.timer_running = False
-                    # Actualizar DB
+                    # Actualizar DB con descripción y facturabilidad actual
                     if st.session_state.active_timer_id:
                         supabase.table("active_timers").update({
                             "is_running": False,
-                            "total_elapsed_seconds": int(new_elapsed)
+                            "total_elapsed_seconds": int(new_elapsed),
+                            "description": descripcion,
+                            "is_billable": es_facturable
                         }).eq("id", st.session_state.active_timer_id).execute()
                     st.rerun()
             
             with col_t2:
                 if st.button("⏹️ Finalizar", disabled=not can_register):
-                    t_now = datetime.now()
+                    t_now = get_lima_now().replace(tzinfo=None)
                     total_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
                     total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
                     
@@ -347,13 +369,15 @@ def mostrar_registro_tiempos():
                 col_p1, col_p2 = st.columns(2)
                 with col_p1:
                     if st.button("▶️ Continuar"):
-                        st.session_state.timer_start = datetime.now()
+                        st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
                         st.session_state.timer_running = True
-                        # Actualizar DB
+                        # Actualizar DB con descripción y facturabilidad actual
                         if st.session_state.active_timer_id:
                             supabase.table("active_timers").update({
                                 "is_running": True,
-                                "start_time": st.session_state.timer_start.isoformat()
+                                "start_time": st.session_state.timer_start.isoformat(),
+                                "description": descripcion,
+                                "is_billable": es_facturable
                             }).eq("id", st.session_state.active_timer_id).execute()
                         st.rerun()
                 with col_p2:
@@ -367,7 +391,7 @@ def mostrar_registro_tiempos():
                         st.rerun()
             else:
                 if st.button("▶️ Iniciar Cronómetro", disabled=not can_register):
-                    st.session_state.timer_start = datetime.now()
+                    st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
                     st.session_state.timer_running = True
                     # Crear en DB
                     try:
@@ -1020,10 +1044,14 @@ else:
                     'RUC': ['20123456789', '20987654321'],
                     'Dirección': ['Av. Principal 123, Lima', 'Jr. Secundario 456, Lima']
                 })
-                buffer_clients = io.BytesIO()
-                with pd.ExcelWriter(buffer_clients, engine='openpyxl') as writer:
-                    template_clients.to_excel(writer, index=False, sheet_name='Clientes')
-                st.download_button("📥 Descargar Template", data=buffer_clients.getvalue(), file_name="template_clientes.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                # DOWNLOAD TEMPLATES
+                if HAS_OPENPYXL:
+                    buffer_clients = io.BytesIO()
+                    with pd.ExcelWriter(buffer_clients, engine='openpyxl') as writer:
+                        template_clients.to_excel(writer, index=False, sheet_name='Clientes')
+                    st.download_button("📥 Descargar Template Clientes", data=buffer_clients.getvalue(), file_name="template_clientes.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    st.warning("⚠️ Requiere 'openpyxl' para descargar templates.")
                 
                 uploaded_clients = st.file_uploader("Seleccionar archivo Excel", type=['xlsx'], key="upload_clients")
                 if uploaded_clients and HAS_OPENPYXL:
@@ -1057,10 +1085,13 @@ else:
                     'Nombre Proyecto': ['Implementación ERP', 'Consultoría Fiscal'],
                     'Moneda': ['PEN', 'USD']
                 })
-                buffer_projects = io.BytesIO()
-                with pd.ExcelWriter(buffer_projects, engine='openpyxl') as writer:
-                    template_projects.to_excel(writer, index=False, sheet_name='Proyectos')
-                st.download_button("📥 Descargar Template", data=buffer_projects.getvalue(), file_name="template_proyectos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                if HAS_OPENPYXL:
+                    buffer_projects = io.BytesIO()
+                    with pd.ExcelWriter(buffer_projects, engine='openpyxl') as writer:
+                        template_projects.to_excel(writer, index=False, sheet_name='Proyectos')
+                    st.download_button("📥 Descargar Template Proyectos", data=buffer_projects.getvalue(), file_name="template_proyectos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    st.warning("⚠️ Requiere 'openpyxl' para descargar templates.")
                 
                 uploaded_projects = st.file_uploader("Seleccionar archivo Excel", type=['xlsx'], key="upload_projects")
                 if uploaded_projects and HAS_OPENPYXL:
@@ -1099,10 +1130,13 @@ else:
                     'Rol': ['Consultor Senior', 'Analista'],
                     'Tarifa': [150.00, 80.00]
                 })
-                buffer_rates = io.BytesIO()
-                with pd.ExcelWriter(buffer_rates, engine='openpyxl') as writer:
-                    template_rates.to_excel(writer, index=False, sheet_name='Tarifas')
-                st.download_button("📥 Descargar Template", data=buffer_rates.getvalue(), file_name="template_tarifas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                if HAS_OPENPYXL:
+                    buffer_rates = io.BytesIO()
+                    with pd.ExcelWriter(buffer_rates, engine='openpyxl') as writer:
+                        template_rates.to_excel(writer, index=False, sheet_name='Tarifas')
+                    st.download_button("📥 Descargar Template Tarifas", data=buffer_rates.getvalue(), file_name="template_tarifas.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    st.warning("⚠️ Requiere 'openpyxl' para descargar templates.")
                 
                 uploaded_rates = st.file_uploader("Seleccionar archivo Excel", type=['xlsx'], key="upload_rates")
                 if uploaded_rates and HAS_OPENPYXL:
@@ -1381,11 +1415,16 @@ Responsable"""
                                         
                                         st.markdown("---")
                                         if HAS_OPENPYXL and full_xls:
-                                            final_xls = pd.concat(full_xls)
-                                            buffer = io.BytesIO()
-                                            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                                                final_xls.to_excel(writer, index=False, sheet_name='Anexo')
-                                            st.download_button("📥 Descargar Anexo Excel", data=buffer.getvalue(), file_name=f"Anexo_{cli_name_sel}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                            try:
+                                                final_xls = pd.concat(full_xls)
+                                                buffer = io.BytesIO()
+                                                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                                                    final_xls.to_excel(writer, index=False, sheet_name='Anexo')
+                                                st.download_button(f"📥 Descargar Anexo Detallado ({moneda_liq})", data=buffer.getvalue(), file_name=f"anexo_{cli_name_sel}_{moneda_liq}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                                            except Exception as e:
+                                                st.error(f"Error generando Excel: {str(e)}")
+                                        elif full_xls:
+                                            st.warning("⚠️ Requiere 'openpyxl' para descargar el anexo en Excel.")
                                     else:
                                         st.info("Seleccione moneda en pestaña Carta.")
 
