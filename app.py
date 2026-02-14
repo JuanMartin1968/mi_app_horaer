@@ -228,8 +228,6 @@ def mostrar_registro_tiempos():
                     st.rerun()
         except: pass
     
-        except: pass
-    
     # 1. Selección de Cliente (Siempre visible)
     clientes_resp = None
     for _ in range(3): # Simple retry logic
@@ -528,7 +526,12 @@ def mostrar_historial_tiempos():
             final_df = df[display_cols].rename(columns={'description': 'Detalle', 'is_billable': '¿Fact?', 'is_paid': 'Cobrado?'})
             
             edited_df = st.data_editor(final_df, use_container_width=True, hide_index=True,
-                column_config={"¿Fact?": st.column_config.CheckboxColumn(label="Fact?")},
+                column_config={
+                    "¿Fact?": st.column_config.CheckboxColumn(label="Fact?"),
+                    "Costo Hora": st.column_config.NumberColumn(format="$%.2f"),
+                    "Total Bruto": st.column_config.NumberColumn(format="$%.2f"),
+                    "Monto Facturable": st.column_config.NumberColumn(format="$%.2f")
+                },
                 disabled=['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Detalle', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'Total Bruto', '¿Fact?', 'Monto Facturable'])
             
             if st.button("Guardar Cambios Historial"):
