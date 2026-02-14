@@ -98,9 +98,8 @@ def get_supabase():
     return create_client(url, service_key if service_key else key)
 
 supabase = get_supabase()
-# Inicializar gestores de memoria (CRITICAL PARA IOS)
+# Inicializar gestor de cookies (CRITICAL PARA IOS)
 cookie_manager = xtc.CookieManager()
-local_manager = xtc.LocalStorageManager()
 
 # --- TRAMPA DE CIERRE TOTAL (HARD LOGOUT) ---
 # Si detectamos 'logout' en la URL, limpiamos TODO antes de que la app se cargue
@@ -599,10 +598,8 @@ if not st.session_state.user and not st.session_state.get('logout_requested'):
             time.sleep(1.0)
             st.rerun()
 
-    # 2. Intentar recuperar de Cookie (xtc) o LocalStorage (xtc)
+    # 2. Intentar recuperar de Cookie de sesión
     u_id = cookie_manager.get('user_id_persist')
-    if not u_id:
-        u_id = local_manager.get('user_id_persist')
     
     if u_id:
         try:
