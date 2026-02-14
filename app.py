@@ -115,11 +115,11 @@ if st.query_params.get("logout") == "1":
             document.cookie.split(";").forEach(function(c) {
                 document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
             });
-            window.location.search = ""; // Limpiar el ?logout=1 de la URL
         </script>
     """, height=0)
-    time.sleep(1.5)
-    st.stop()
+    time.sleep(1.0)
+    st.query_params.clear() # Limpiar el ?logout=1
+    st.rerun() # Esto nos llevará a la pantalla de login limpia
 
 # Estilos premium
 st.markdown("""
