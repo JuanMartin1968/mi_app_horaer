@@ -435,8 +435,27 @@ def mostrar_registro_tiempos():
                                 st.session_state.active_timer_id = resp.data[0]['id']
                                 st.session_state.active_project_id = p_id
                             st.rerun()
+                            st.rerun()
                         except Exception as e:
+                            # Intento de recuperación si falla por duplicado (RLS/Unique violation)
+                            if "violates row-level security" in str(e) or "duplicate key" in str(e) or "42501" in str(e):
+                                try:
+                                    # Forzar recuperación
+                                    rec_q = supabase.table("active_timers").select("*").eq("user_id", st.session_state.user.id).execute()
+                                    if rec_q and rec_q.data:
+                                        t_rec = rec_q.data[0]
+                                        st.session_state.active_timer_id = t_rec['id']
+                                        st.session_state.timer_running = t_rec['is_running']
+                                        st.session_state.timer_start = pd.to_datetime(t_rec['start_time']).replace(tzinfo=None)
+                                        st.session_state.total_elapsed = t_rec['total_elapsed_seconds']
+                                        st.session_state.active_project_id = t_rec['project_id']
+                                        st.rerun()
+                                except:
+                                    pass
                             st.error(f"Error iniciando cronómetro: {str(e)}")
+                            if st.button("🔴 Forzar Reinicio de Estado"):
+                                limpiar_estado_timer()
+                                st.rerun()
 
     # 4. TABLA DE HISTORIAL (Siempre visible al final)
     st.markdown("---")
