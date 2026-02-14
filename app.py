@@ -108,12 +108,13 @@ if st.query_params.get("logout") == "1":
     # Limpiar Python
     st.session_state.user = None
     st.session_state.logout_requested = True
-    # Limpiar Cookies y LocalStorage vía JS (Lo más agresivo)
     st.components.v1.html("""
         <script>
             localStorage.clear();
             document.cookie.split(";").forEach(function(c) {
-                document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+                // Borrado universal de cookies por path y dominio
+                const base = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+                document.cookie = base;
             });
         </script>
     """, height=0)
@@ -160,12 +161,13 @@ def login_user(email, password):
             st.session_state.is_admin = is_admin_check or (acc_type == "Administrador")
             st.session_state.logout_requested = False
             
-            # Persistencia Nativa: document.cookie (Fuerte) + LocalStorage (Fallback)
+            # Persistencia Universal: document.cookie (Lax) + LocalStorage (Fallback fuerte)
             st.components.v1.html(f"""
                 <script>
                     const expire = new Date();
                     expire.setTime(expire.getTime() + (30*24*60*60*1000));
-                    document.cookie = "user_id_persist={response.user.id}; expires=" + expire.toUTCString() + "; path=/;";
+                    const value = "user_id_persist={response.user.id}; expires=" + expire.toUTCString() + "; path=/; SameSite=Lax";
+                    document.cookie = value;
                     localStorage.setItem("user_id_persist", "{response.user.id}");
                 </script>
             """, height=0)
@@ -297,8 +299,13 @@ def mostrar_registro_tiempos():
     def_desc = st.session_state.get('active_timer_description', '')
     def_fact = st.session_state.get('active_timer_billable', True)
 
-    descripcion = st.text_area("Detalle del trabajo", value=def_desc, placeholder="Qu hiciste?", key=f"desc_{st.session_state.form_key_suffix}")
+    descripcion = st.text_area("Detalle del trabajo", value=def_desc, placeholder="¿Qué hiciste?", key=f"desc_{st.session_state.form_key_suffix}")
     es_facturable = st.checkbox("Es facturable?", value=def_fact, key=f"fact_{st.session_state.form_key_suffix}")
+    
+    # VALIDACIÓN DE CAMPOS COMPLETOS
+    form_valido = len(descripcion.strip()) > 3 # Al menos 4 caracteres para ser válido
+    if not form_valido:
+        st.warning(" ⚠️ Debe ingresar el **Detalle del trabajo** para habilitar el registro.")
     
     st.markdown("---")
     col1, col2 = st.columns(2)
@@ -309,7 +316,7 @@ def mostrar_registro_tiempos():
         t_inicio_str = st.text_input("Hora Inicio (HH:mm)", value="08:00", key=f"hi_{st.session_state.form_key_suffix}")
         t_fin_str = st.text_input("Hora Final (HH:mm)", value="09:00", key=f"hf_{st.session_state.form_key_suffix}")
         
-        if st.button("Registrar Manualmente", disabled=not can_register, use_container_width=True):
+        if st.button("Registrar Manualmente", disabled=not (can_register and form_valido), use_container_width=True):
             try:
                 # Validar formatos
                 t1_dt = datetime.strptime(t_inicio_str, "%H:%M")
@@ -391,7 +398,7 @@ def mostrar_registro_tiempos():
                     st.rerun()
             
             with col_t3:
-                if st.button(" Finalizar", disabled=not can_register, use_container_width=True, type="primary"):
+                if st.button(" Finalizar", disabled=not (can_register and form_valido), use_container_width=True, type="primary"):
                     try:
                         t_now = get_lima_now().replace(tzinfo=None)
                         total_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
@@ -470,7 +477,7 @@ def mostrar_registro_tiempos():
                         st.session_state.form_key_suffix += 1
                         st.rerun()
             else:
-                if st.button(" Iniciar Cronmetro", disabled=not can_register):
+                if st.button(" Iniciar Cronómetro", disabled=not (can_register and form_valido)):
                     st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
                     st.session_state.timer_running = True
                     # Crear en DB
