@@ -173,6 +173,31 @@ def mostrar_registro_tiempos():
     
     # Manejo de keys para borrado
     if 'form_key_suffix' not in st.session_state: st.session_state.form_key_suffix = 0
+    if 'timer_running' not in st.session_state: st.session_state.timer_running = False
+    if 'timer_start' not in st.session_state: st.session_state.timer_start = None
+    if 'total_elapsed' not in st.session_state: st.session_state.total_elapsed = 0
+    if 'active_timer_id' not in st.session_state: st.session_state.active_timer_id = None
+
+    # --- SINCRONIZACIN INICIAL (CRITICAL PARA IOS) ---
+    # Se hace AQU para que cargue Cliente/Proyecto ANTES de renderizar el formulario
+    if st.session_state.active_timer_id is None and st.session_state.user:
+        try:
+            timer_q = supabase.table("active_timers").select("*, projects(name, client_id, clients(name))").eq("user_id", st.session_state.user.id).execute()
+            if timer_q and timer_q.data:
+                t_data = timer_q.data[0]
+                if t_data['is_running'] or t_data['total_elapsed_seconds'] > 0:
+                    st.session_state.active_timer_id = t_data['id']
+                    st.session_state.timer_running = t_data['is_running']
+                    st.session_state.timer_start = pd.to_datetime(t_data['start_time']).replace(tzinfo=None)
+                    st.session_state.total_elapsed = t_data['total_elapsed_seconds']
+                    # Sincronizar UI
+                    st.session_state.active_project_id = t_data['project_id']
+                    st.session_state.active_project_name = t_data['projects']['name']
+                    st.session_state.active_client_name = t_data['projects']['clients']['name']
+                    st.session_state.active_timer_description = t_data.get('description', '')
+                    st.session_state.active_timer_billable = t_data.get('is_billable', True)
+                    st.rerun()
+        except: pass
     
     # 1. Selección de Cliente y Proyecto
     clientes = supabase.table("clients").select("id, name").order("name").execute()
@@ -301,37 +326,8 @@ def mostrar_registro_tiempos():
             except ValueError:
                 st.error("Formato invlido. Use HH:mm (ej: 08:33)")
 
-    # 3. CRONMETRO (Persistente)
     with col2:
-        st.subheader(" Cronmetro")
-        if 'timer_running' not in st.session_state: st.session_state.timer_running = False
-        if 'timer_start' not in st.session_state: st.session_state.timer_start = None
-        if 'total_elapsed' not in st.session_state: st.session_state.total_elapsed = 0
-        if 'active_timer_id' not in st.session_state: st.session_state.active_timer_id = None
-
-        # Sincronización inicial con la base de datos (solo una vez por sesión o si no hay timer local)
-        if st.session_state.active_timer_id is None and st.session_state.user:
-            try:
-                # Query expandida para obtener nombres de cliente/proyecto
-                timer_q = supabase.table("active_timers").select("*, projects(name, client_id, clients(name))").eq("user_id", st.session_state.user.id).execute()
-                if timer_q and timer_q.data:
-                    t_data = timer_q.data[0]
-                    # Solo sincronizar si está corriendo o tiene tiempo guardado
-                    if t_data['is_running'] or t_data['total_elapsed_seconds'] > 0:
-                        st.session_state.active_timer_id = t_data['id']
-                        st.session_state.timer_running = t_data['is_running']
-                        st.session_state.timer_start = pd.to_datetime(t_data['start_time']).replace(tzinfo=None)
-                        st.session_state.total_elapsed = t_data['total_elapsed_seconds']
-                        # Persistencia de formulario
-                        st.session_state.active_project_id = t_data['project_id']
-                        st.session_state.active_project_name = t_data['projects']['name']
-                        st.session_state.active_client_name = t_data['projects']['clients']['name']
-                        st.session_state.active_timer_description = t_data.get('description', '')
-                        st.session_state.active_timer_billable = t_data.get('is_billable', True)
-                        st.rerun()
-            except Exception as e:
-                # Error silencioso en carga para no interrumpir el flujo
-                pass
+        st.subheader(" Cronómetro")
 
         # CONTROL DE VISIBILIDAD DE CRONMETRO ACTIVO
         # Solo mostrar si el proyecto seleccionado coincide con el timer de la DB
@@ -414,43 +410,6 @@ def mostrar_registro_tiempos():
                         st.rerun()
                     except Exception as e:
                         st.error(f" Error al finalizar: {str(e)}")
-                    t_now = get_lima_now().replace(tzinfo=None)
-                    total_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
-                    total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
-                    
-                    tz_local = timezone(timedelta(hours=-5))
-                    t_start_local = st.session_state.timer_start - timedelta(seconds=st.session_state.total_elapsed)
-                    start_dt = datetime.combine(fecha_sel, t_start_local.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
-                    end_dt = start_dt + timedelta(minutes=total_min)
-                    
-                    supabase.table("time_entries").insert({
-                        "profile_id": target_user_id,
-                        "project_id": p_id,
-                        "description": descripcion,
-                        "start_time": start_dt.isoformat(),
-                        "end_time": end_dt.isoformat(),
-                        "total_minutes": total_min,
-                        "is_billable": es_facturable
-                    }).execute()
-                    
-                    # Limpiar DB
-                    if st.session_state.active_timer_id:
-                        supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
-
-                    # LIMPIEZA TOTAL DE ESTADO
-                    st.session_state.timer_running = False
-                    st.session_state.total_elapsed = 0
-                    st.session_state.timer_start = None
-                    st.session_state.active_timer_id = None
-                    st.session_state.active_project_id = None
-                    st.session_state.active_project_name = None
-                    st.session_state.active_client_name = None
-                    st.session_state.active_timer_description = ''
-                    st.session_state.active_timer_billable = True
-                    
-                    st.session_state.success_msg = " Registro con cronmetro guardado y pantalla limpiada."
-                    st.session_state.form_key_suffix += 1
-                    st.rerun()
         else:
             if st.session_state.total_elapsed > 0:
                 hrs, rem = divmod(int(st.session_state.total_elapsed), 3600)
