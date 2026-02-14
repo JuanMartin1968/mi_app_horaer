@@ -508,6 +508,7 @@ def mostrar_historial_tiempos():
         df['Tiempo'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
         df['Cliente'] = df['projects.clients.name'].fillna('...')
         df['Proyecto'] = df['projects.name'].fillna('...')
+        df['Moneda'] = df['projects.currency'].fillna('')
         df['Usuario'] = df['profiles.full_name'].fillna('...')
         
         if st.session_state.is_admin:
@@ -522,17 +523,17 @@ def mostrar_historial_tiempos():
                 return pd.Series([rate, total, total if row['is_billable'] else 0.0])
             df[['Costo Hora', 'Total Bruto', 'Monto Facturable']] = df.apply(calc_metrics, axis=1)
             
-            display_cols = ['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'is_billable', 'Total Bruto', 'Monto Facturable', 'is_paid', 'invoice_number']
+            display_cols = ['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Moneda', 'description', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'is_billable', 'Total Bruto', 'Monto Facturable', 'is_paid', 'invoice_number']
             final_df = df[display_cols].rename(columns={'description': 'Detalle', 'is_billable': '¿Fact?', 'is_paid': 'Cobrado?'})
             
             edited_df = st.data_editor(final_df, use_container_width=True, hide_index=True,
                 column_config={
                     "¿Fact?": st.column_config.CheckboxColumn(label="Fact?"),
-                    "Costo Hora": st.column_config.NumberColumn(format="$%.2f"),
-                    "Total Bruto": st.column_config.NumberColumn(format="$%.2f"),
-                    "Monto Facturable": st.column_config.NumberColumn(format="$%.2f")
+                    "Costo Hora": st.column_config.NumberColumn(format="%.2f"),
+                    "Total Bruto": st.column_config.NumberColumn(format="%.2f"),
+                    "Monto Facturable": st.column_config.NumberColumn(format="%.2f")
                 },
-                disabled=['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Detalle', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'Total Bruto', '¿Fact?', 'Monto Facturable'])
+                disabled=['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Moneda', 'Detalle', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'Total Bruto', '¿Fact?', 'Monto Facturable'])
             
             if st.button("Guardar Cambios Historial"):
                 for idx, row in edited_df.iterrows():
