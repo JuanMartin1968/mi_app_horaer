@@ -98,9 +98,8 @@ def get_supabase():
     return create_client(url, service_key if service_key else key)
 
 supabase = get_supabase()
-# Inicializar gestores de persistencia (CRITICAL PARA IOS)
+# Inicializar gestor de cookies (CRITICAL PARA IOS)
 cookie_manager = xtc.CookieManager()
-local_manager = xtc.LocalStorageManager()
 
 # Estilos premium
 st.markdown("""
@@ -140,21 +139,19 @@ def login_user(email, password):
             acc_type = p_data.get('account_type', '')
             st.session_state.is_admin = is_admin_check or (acc_type == "Administrador")
             
-            # Inyección de JS para persistencia REAL (document.cookie + localStorage)
-            # Esto sobrepasa las limitaciones de los componentes de Streamlit en iPhone
+            # Inyección de JS para persistencia (document.cookie)
+            # Esto ayuda a Safari/iPhone a procesar la memoria de sesión
             st.components.v1.html(f"""
                 <script>
                     const val = "{response.user.id}";
-                    localStorage.setItem("user_id_persist", val);
                     const d = new Date();
                     d.setTime(d.getTime() + (30*24*60*60*1000));
                     document.cookie = "user_id_persist=" + val + "; expires=" + d.toUTCString() + "; path=/; SameSite=Lax";
-                    window.parent.postMessage("cookie_saved", "*");
                 </script>
             """, height=0)
             
             st.success(" Sesión guardada en este dispositivo.")
-            time.sleep(1.5) # Pausa necesaria para que el iPhone escriba en disco
+            time.sleep(1.0)
             st.rerun()
     except Exception as e:
         st.error(f" Error de acceso: {str(e)}")
@@ -613,17 +610,15 @@ def mostrar_registro_tiempos():
 
 # --- RECUERDO DE SESIÓN ---
 if not st.session_state.user:
-    # 1. Dar un momento a los componentes para "hablar" con el navegador en la primera carga
+    # 1. Puerta de hidratación para iOS
     if "init_gate" not in st.session_state:
         st.session_state.init_gate = True
         with st.spinner("⏳ Verificando sesión..."):
-            time.sleep(1.0) # Tiempo para que iPhone/Safari procese cookies/storage
+            time.sleep(1.0)
             st.rerun()
 
-    # 2. Intentar recuperar u_id de Cookie o LocalStorage
-    c_id = cookie_manager.get('user_id_persist')
-    l_id = local_manager.get('user_id_persist')
-    u_id = c_id if c_id else l_id
+    # 2. Recuperar u_id de Cookie
+    u_id = cookie_manager.get('user_id_persist')
     
     if u_id:
         try:
@@ -655,7 +650,6 @@ else:
             # Limpiar rastro en el navegador
             st.components.v1.html("""
                 <script>
-                    localStorage.removeItem("user_id_persist");
                     document.cookie = "user_id_persist=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
                 </script>
             """, height=0)
