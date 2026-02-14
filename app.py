@@ -188,7 +188,11 @@ if 'logout_requested' not in st.session_state:
 
 # Función reutilizable para el Registro de Tiempos
 def mostrar_registro_tiempos():
-    st.header(" Registro de Tiempos")
+    # 0. TABLA DE HISTORIAL (Carga automática e inmediata al entrar)
+    mostrar_historial_tiempos()
+    
+    st.markdown("---")
+    st.subheader("⏱️ Registrar Nuevo Tiempo")
     
     # Manejo de mensajes persistentes tras rerun
     if 'success_msg' in st.session_state:
@@ -223,13 +227,13 @@ def mostrar_registro_tiempos():
                     st.rerun()
         except: pass
     
-    # 1. Selección de Cliente y Proyecto
-    clientes = supabase.table("clients").select("id, name").order("name").execute()
-    if not clientes.data:
+    # 1. Selección de Cliente (Siempre visible debajo del historial)
+    clientes_resp = supabase.table("clients").select("id, name").order("name").execute()
+    if not clientes_resp.data:
         st.info("Aún no hay clientes registrados.")
         return
         
-    client_map = {c['name']: c['id'] for c in clientes.data}
+    client_map = {c['name']: c['id'] for c in clientes_resp.data}
     
     # Recuperar cliente del timer activo si existe
     index_cliente = 0
@@ -238,364 +242,276 @@ def mostrar_registro_tiempos():
 
     cliente_sel = st.selectbox("Seleccionar Cliente", ["---"] + list(client_map.keys()), index=index_cliente, key=f"cli_{st.session_state.form_key_suffix}")
     
-    if cliente_sel == "---": return
-
-    proyectos = supabase.table("projects").select("id, name, currency").eq("client_id", client_map[cliente_sel]).order("name").execute()
-    if not proyectos.data:
-        st.warning(f"Sin proyectos para {cliente_sel}.")
-        return
-        
-    proj_map = {p['name']: p['id'] for p in proyectos.data}
-    proj_currency = {p['id']: p['currency'] for p in proyectos.data}
-    
-    index_proj = 0
-    if 'active_project_name' in st.session_state and st.session_state.active_project_name in proj_map:
-        index_proj = list(proj_map.keys()).index(st.session_state.active_project_name)
-
-    proyecto_sel = st.selectbox("Seleccionar Proyecto", list(proj_map.keys()), index=index_proj, key=f"pro_{st.session_state.form_key_suffix}")
-    # Variables para alcance (Scope)
-    # Variables para alcance (Scope)
-    target_user_id = st.session_state.user.id
+    # Variables de control y estado (Scope de la función)
     fecha_sel = get_lima_now()
-    p_id = proj_map[proyecto_sel]
-    moneda = proj_currency[p_id]
-    
-    st.info(f"Proyecto: **{proyecto_sel}** | Moneda: **{moneda}**")
-    
-    col_u1, col_u2 = st.columns(2)
-    with col_u1:
-        fecha_sel = st.date_input("Fecha", value=get_lima_now(), max_value=get_lima_now(), key=f"fec_{st.session_state.form_key_suffix}")
-    with col_u2:
-        if st.session_state.is_admin:
-            usuarios_res = supabase.table("profiles").select("id, full_name").eq("is_active", True).execute()
-            user_map = {u['full_name']: u['id'] for u in usuarios_res.data}
-            usuario_para = st.selectbox("Registrar para", list(user_map.keys()), index=list(user_map.values()).index(st.session_state.user.id) if st.session_state.user.id in user_map.values() else 0, key=f"user_sel_{st.session_state.form_key_suffix}")
-            target_user_id = user_map[usuario_para]
+    listo_para_registro = False
+    p_id = None
+    moneda = "$"
+    can_register = False
+    form_valido = False
+    descripcion = ""
+    es_facturable = True
+    target_user_id = st.session_state.user.id
+
+    if cliente_sel != "---":
+        proyectos = supabase.table("projects").select("id, name, currency").eq("client_id", client_map[cliente_sel]).order("name").execute()
+        if not proyectos.data:
+            st.warning(f"Sin proyectos para {cliente_sel}.")
         else:
-            target_user_id = st.session_state.user.id
-        st.write(f"Usuario: **{st.session_state.profile['full_name']}**")
+            proj_map = {p['name']: p['id'] for p in proyectos.data}
+            proj_currency = {p['id']: p['currency'] for p in proyectos.data}
+            
+            index_proj = 0
+            if 'active_project_name' in st.session_state and st.session_state.active_project_name in proj_map:
+                index_proj = list(proj_map.keys()).index(st.session_state.active_project_name)
 
-    # VALIDACIN DE TARIFA
-    if not target_user_id:
-        st.warning("Sesin no vlida o usuario no detectado. Por favor, inicie sesin nuevamente.")
-        return
-
-    profile_info = supabase.table("profiles").select("role_id").eq("id", target_user_id).single().execute()
-    role_id = profile_info.data['role_id']
-    rate_q = supabase.table("project_rates").select("rate").eq("project_id", p_id).eq("role_id", role_id).execute()
-    
-    current_rate_val = float(rate_q.data[0]['rate']) if rate_q.data else 0.0
-    
-    if current_rate_val <= 0:
-        if st.session_state.is_admin:
-            st.warning(f" **Atención**: No se han definido tarifas para el rol en este proyecto.")
-        can_register = True # Permitir registrar incluso sin tarifa (ser 0)
-    else:
-        if st.session_state.is_admin:
-            st.success(f"Tarifa detectada: **{current_rate_val} {moneda}/h**")
-        can_register = True
-
-    # Valor por defecto para descripción y facturabilidad
-    def_desc = st.session_state.get('active_timer_description', '')
-    def_fact = st.session_state.get('active_timer_billable', True)
-
-    descripcion = st.text_area("Detalle del trabajo", value=def_desc, placeholder="¿Qué hiciste?", key=f"desc_{st.session_state.form_key_suffix}")
-    es_facturable = st.checkbox("Es facturable?", value=def_fact, key=f"fact_{st.session_state.form_key_suffix}")
-    
-    # VALIDACIÓN DE CAMPOS COMPLETOS
-    form_valido = len(descripcion.strip()) > 3 # Al menos 4 caracteres para ser válido
-    if not form_valido:
-        st.warning(" ⚠️ Debe ingresar el **Detalle del trabajo** para habilitar el registro.")
-    
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    
-    # 2. INGRESO MANUAL (Restaurado a TEXTO para precisin HH:mm)
-    with col1:
-        st.subheader(" Ingreso Manual")
-        t_inicio_str = st.text_input("Hora Inicio (HH:mm)", value="08:00", key=f"hi_{st.session_state.form_key_suffix}")
-        t_fin_str = st.text_input("Hora Final (HH:mm)", value="09:00", key=f"hf_{st.session_state.form_key_suffix}")
-        
-        if st.button("Registrar Manualmente", disabled=not (can_register and form_valido), use_container_width=True):
-            try:
-                # Validar formatos
-                t1_dt = datetime.strptime(t_inicio_str, "%H:%M")
-                t2_dt = datetime.strptime(t_fin_str, "%H:%M")
-                
-                # Considerar UTC-5 (Bogotá/Lima) para el ingreso manual
-                tz_local = timezone(timedelta(hours=-5))
-                t1 = datetime.combine(fecha_sel, t1_dt.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
-                t2 = datetime.combine(fecha_sel, t2_dt.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
-                
-                if t2 <= t1:
-                    st.error("La hora final debe ser posterior a la inicial.")
+            proyecto_sel = st.selectbox("Seleccionar Proyecto", list(proj_map.keys()), index=index_proj, key=f"pro_{st.session_state.form_key_suffix}")
+            p_id = proj_map[proyecto_sel]
+            moneda = proj_currency[p_id]
+            listo_para_registro = True
+            
+            st.info(f"Proyecto: **{proyecto_sel}** | Moneda: **{moneda}**")
+            
+            col_u1, col_u2 = st.columns(2)
+            with col_u1:
+                fecha_sel = st.date_input("Fecha", value=get_lima_now(), max_value=get_lima_now(), key=f"fec_{st.session_state.form_key_suffix}")
+            with col_u2:
+                if st.session_state.is_admin:
+                    usuarios_res = supabase.table("profiles").select("id, full_name").eq("is_active", True).execute()
+                    user_map = {u['full_name']: u['id'] for u in usuarios_res.data}
+                    usuario_para = st.selectbox("Registrar para", list(user_map.keys()), index=list(user_map.values()).index(st.session_state.user.id) if st.session_state.user.id in user_map.values() else 0, key=f"user_sel_{st.session_state.form_key_suffix}")
+                    target_user_id = user_map[usuario_para]
                 else:
-                    total_min = int((t2 - t1).total_seconds() / 60)
-                    supabase.table("time_entries").insert({
-                        "profile_id": target_user_id,
-                        "project_id": p_id,
-                        "description": descripcion,
-                        "start_time": t1.isoformat(),
-                        "end_time": t2.isoformat(),
-                        "total_minutes": total_min,
-                        "is_billable": es_facturable
-                    }).execute()
+                    target_user_id = st.session_state.user.id
+                st.write(f"Usuario: **{st.session_state.profile['full_name']}**")
+
+            # VALIDACIÓN DE TARIFA
+            if target_user_id:
+                try:
+                    profile_info = supabase.table("profiles").select("role_id").eq("id", target_user_id).single().execute()
+                    role_id = profile_info.data['role_id']
+                    rate_q = supabase.table("project_rates").select("rate").eq("project_id", p_id).eq("role_id", role_id).execute()
                     
-                    # LIMPIEZA TOTAL TRAS GUARDAR MANUAL
-                    st.session_state.active_timer_description = ''
-                    st.session_state.active_timer_billable = True
-                    st.session_state.active_client_name = None
-                    st.session_state.active_project_name = None
-                    
-                    st.session_state.success_msg = f" Guardado con éxito ({t_inicio_str} a {t_fin_str})."
-                    st.session_state.form_key_suffix += 1
-                    st.rerun()
-            except Exception as e:
-                st.error(f" Error al registrar: {str(e)}")
-            except ValueError:
-                st.error("Formato invlido. Use HH:mm (ej: 08:33)")
+                    current_rate_val = float(rate_q.data[0]['rate']) if rate_q.data else 0.0
+                    if current_rate_val <= 0:
+                        if st.session_state.is_admin:
+                            st.warning(f" **Atención**: No se han definido tarifas para el rol en este proyecto.")
+                    else:
+                        if st.session_state.is_admin:
+                            st.success(f"Tarifa detectada: **{current_rate_val} {moneda}/h**")
+                    can_register = True
+                except:
+                    pass
 
-    with col2:
-        st.subheader(" Cronómetro")
+            # Valor por defecto para descripción y facturabilidad
+            def_desc = st.session_state.get('active_timer_description', '')
+            def_fact = st.session_state.get('active_timer_billable', True)
 
-        # CONTROL DE VISIBILIDAD DE CRONMETRO ACTIVO
-        # Solo mostrar si el proyecto seleccionado coincide con el timer de la DB
-        timer_is_for_current_proj = False
-        if st.session_state.active_timer_id and st.session_state.get('active_project_id') == p_id:
-            timer_is_for_current_proj = True
+            descripcion = st.text_area("Detalle del trabajo", value=def_desc, placeholder="¿Qué hiciste?", key=f"desc_{st.session_state.form_key_suffix}")
+            es_facturable = st.checkbox("Es facturable?", value=def_fact, key=f"fact_{st.session_state.form_key_suffix}")
+            form_valido = len(descripcion.strip()) > 3
+            if not form_valido:
+                st.warning(" ⚠️ Ingrese el **Detalle del trabajo** para habilitar el registro.")
 
-        if st.session_state.timer_running and timer_is_for_current_proj:
-            # Calculamos tiempo transcurrido total
-            now_lima = get_lima_now().replace(tzinfo=None)
-            actual_elapsed = st.session_state.total_elapsed + (now_lima - st.session_state.timer_start).total_seconds()
-            
-            hrs, rem = divmod(int(actual_elapsed), 3600)
-            mins, secs = divmod(rem, 60)
-            st.metric(" EN VIVO (Cronometrando)", f"{hrs:02d}:{mins:02d}:{secs:02d}")
-
-            col_t1, col_t2, col_t3 = st.columns(3)
-            with col_t1:
-                if st.button(" || Pausar", use_container_width=True):
-                    try:
-                        t_now = get_lima_now().replace(tzinfo=None)
-                        new_elapsed = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
-                        st.session_state.total_elapsed = new_elapsed
-                        st.session_state.timer_running = False
-                        # Actualizar DB
-                        if st.session_state.active_timer_id:
-                            supabase.table("active_timers").update({
-                                "is_running": False,
-                                "total_elapsed_seconds": int(new_elapsed),
-                                "description": descripcion,
-                                "is_billable": es_facturable
-                            }).eq("id", st.session_state.active_timer_id).execute()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f" Error al pausar: {str(e)}")
-            
-            with col_t2:
-                if st.button(" 🔄 Sincronizar", use_container_width=True, help="Fuerza la actualización si el tiempo se ve estático"):
-                    st.rerun()
-            
-            with col_t3:
-                if st.button(" Finalizar", disabled=not (can_register and form_valido), use_container_width=True, type="primary"):
-                    try:
-                        t_now = get_lima_now().replace(tzinfo=None)
-                        total_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
-                        total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
-                        
-                        tz_local = timezone(timedelta(hours=-5))
-                        t_start_local = st.session_state.timer_start - timedelta(seconds=st.session_state.total_elapsed)
-                        start_dt = datetime.combine(fecha_sel, t_start_local.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
-                        end_dt = start_dt + timedelta(minutes=total_min)
-                        
-                        supabase.table("time_entries").insert({
-                            "profile_id": target_user_id,
-                            "project_id": p_id,
-                            "description": descripcion,
-                            "start_time": start_dt.isoformat(),
-                            "end_time": end_dt.isoformat(),
-                            "total_minutes": total_min,
-                            "is_billable": es_facturable
-                        }).execute()
-                        
-                        # Limpiar DB
-                        if st.session_state.active_timer_id:
-                            supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
-
-                        # LIMPIEZA TOTAL DE ESTADO
-                        st.session_state.timer_running = False
-                        st.session_state.total_elapsed = 0
-                        st.session_state.timer_start = None
-                        st.session_state.active_timer_id = None
-                        st.session_state.active_project_id = None
-                        st.session_state.active_project_name = None
-                        st.session_state.active_client_name = None
-                        st.session_state.active_timer_description = ''
-                        st.session_state.active_timer_billable = True
-                        
-                        st.session_state.success_msg = " Registro con cronómetro guardado y pantalla limpiada."
-                        st.session_state.form_key_suffix += 1
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f" Error al finalizar: {str(e)}")
-        else:
-            if st.session_state.total_elapsed > 0:
-                hrs, rem = divmod(int(st.session_state.total_elapsed), 3600)
-                mins, secs = divmod(rem, 60)
-                st.metric("Pausado", f"{hrs:02d}:{mins:02d}:{secs:02d}")
-                col_p1, col_p2 = st.columns(2)
-                with col_p1:
-                    if st.button(" Continuar"):
-                        st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
-                        st.session_state.timer_running = True
-                        # Actualizar DB con descripción y facturabilidad actual
-                        if st.session_state.active_timer_id:
-                            supabase.table("active_timers").update({
-                                "is_running": True,
-                                "start_time": st.session_state.timer_start.isoformat(),
-                                "description": descripcion,
-                                "is_billable": es_facturable
-                            }).eq("id", st.session_state.active_timer_id).execute()
-                        st.rerun()
-                with col_p2:
-                    if st.button(" Descartar"):
-                        if st.session_state.active_timer_id:
-                            supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
-                        
-                        # LIMPIEZA TOTAL
-                        st.session_state.timer_running = False
-                        st.session_state.total_elapsed = 0
-                        st.session_state.timer_start = None
-                        st.session_state.active_timer_id = None
-                        st.session_state.active_project_id = None
-                        st.session_state.active_project_name = None
-                        st.session_state.active_client_name = None
-                        st.session_state.active_timer_description = ''
-                        st.session_state.active_timer_billable = True
-                        
-                        st.session_state.form_key_suffix += 1
-                        st.rerun()
-            else:
-                if st.button(" Iniciar Cronómetro", disabled=not (can_register and form_valido)):
-                    st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
-                    st.session_state.timer_running = True
-                    # Crear en DB
-                    try:
-                        resp = supabase.table("active_timers").insert({
-                            "user_id": st.session_state.user.id,
-                            "project_id": p_id,
-                            "start_time": st.session_state.timer_start.isoformat(),
-                            "description": descripcion,
-                            "is_billable": es_facturable,
-                            "is_running": True
-                        }).execute()
-                        if resp.data:
-                            st.session_state.active_timer_id = resp.data[0]['id']
-                            st.session_state.active_project_id = p_id
-                    except Exception as e:
-                        st.error(f"Error iniciando cronmetro: {str(e)}")
-                    st.rerun()
-
-    # 4. TABLA DE HISTORIAL (Diferenciada por rol)
     st.markdown("---")
-    st.subheader(" Historial de Horas")
     
-    # Query base
+    # 2. SECCIÓN DE REGISTRO (Solo si hay proyecto)
+    if listo_para_registro:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader(" Ingreso Manual")
+            t_inicio_str = st.text_input("Hora Inicio (HH:mm)", value="08:00", key=f"hi_{st.session_state.form_key_suffix}")
+            t_fin_str = st.text_input("Hora Final (HH:mm)", value="09:00", key=f"hf_{st.session_state.form_key_suffix}")
+            
+            if st.button("Registrar Manualmente", disabled=not (can_register and form_valido), use_container_width=True):
+                try:
+                    t1_dt = datetime.strptime(t_inicio_str, "%H:%M")
+                    t2_dt = datetime.strptime(t_fin_str, "%H:%M")
+                    tz_local = timezone(timedelta(hours=-5))
+                    t1 = datetime.combine(fecha_sel, t1_dt.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                    t2 = datetime.combine(fecha_sel, t2_dt.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                    
+                    if t2 <= t1:
+                        st.error("La hora final debe ser posterior a la inicial.")
+                    else:
+                        supabase.table("time_entries").insert({
+                            "profile_id": target_user_id, "project_id": p_id, "description": descripcion,
+                            "start_time": t1.isoformat(), "end_time": t2.isoformat(),
+                            "total_minutes": int((t2 - t1).total_seconds() / 60), "is_billable": es_facturable
+                        }).execute()
+                        limpiar_estado_timer()
+                        st.session_state.success_msg = f" Guardado con éxito ({t_inicio_str} a {t_fin_str})."
+                        st.session_state.form_key_suffix += 1
+                        st.rerun()
+                except ValueError:
+                    st.error("Formato invlido. Use HH:mm (ej: 08:33)")
+                except Exception as e:
+                    st.error(f" Error: {str(e)}")
+
+        with col2:
+            st.subheader(" Cronómetro")
+            timer_is_for_current_proj = (st.session_state.active_timer_id and st.session_state.get('active_project_id') == p_id)
+
+            if st.session_state.timer_running and timer_is_for_current_proj:
+                now_lima = get_lima_now().replace(tzinfo=None)
+                actual_elapsed = st.session_state.total_elapsed + (now_lima - st.session_state.timer_start).total_seconds()
+                hrs, rem = divmod(int(actual_elapsed), 3600)
+                mins, secs = divmod(rem, 60)
+                st.metric(" EN VIVO", f"{hrs:02d}:{mins:02d}:{secs:02d}")
+
+                c_t1, c_t2, c_t3 = st.columns(3)
+                with c_t1:
+                    if st.button(" || Pausar", use_container_width=True):
+                        try:
+                            t_now = get_lima_now().replace(tzinfo=None)
+                            new_elapsed = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
+                            st.session_state.total_elapsed = new_elapsed
+                            st.session_state.timer_running = False
+                            supabase.table("active_timers").update({
+                                "is_running": False, "total_elapsed_seconds": int(new_elapsed),
+                                "description": descripcion, "is_billable": es_facturable
+                            }).eq("id", st.session_state.active_timer_id).execute()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f" Error al pausar: {str(e)}")
+                with c_t2:
+                    if st.button(" 🔄 Sinc", use_container_width=True, help="Fuerza la actualización si el tiempo se ve estático"): st.rerun()
+                with c_t3:
+                    if st.button(" Fin", disabled=not (can_register and form_valido), use_container_width=True, type="primary"):
+                        try:
+                            t_now = get_lima_now().replace(tzinfo=None)
+                            t_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
+                            t_min = int(t_sec // 60) + (1 if t_sec % 60 > 0 else 0)
+                            tz_local = timezone(timedelta(hours=-5))
+                            t_st_loc = st.session_state.timer_start - timedelta(seconds=st.session_state.total_elapsed)
+                            st_dt = datetime.combine(fecha_sel, t_st_loc.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                            end_dt = st_dt + timedelta(minutes=t_min)
+                            supabase.table("time_entries").insert({
+                                "profile_id": target_user_id, "project_id": p_id, "description": descripcion,
+                                "start_time": st_dt.isoformat(), "end_time": end_dt.isoformat(),
+                                "total_minutes": t_min, "is_billable": es_facturable
+                            }).execute()
+                            if st.session_state.active_timer_id:
+                                supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
+                            limpiar_estado_timer()
+                            st.session_state.success_msg = " Cronómetro guardado."
+                            st.session_state.form_key_suffix += 1
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f" Error al finalizar: {str(e)}")
+            else:
+                if st.session_state.total_elapsed > 0:
+                    hrs, rem = divmod(int(st.session_state.total_elapsed), 3600)
+                    mins, secs = divmod(rem, 60)
+                    st.metric("Pausado", f"{hrs:02d}:{mins:02d}:{secs:02d}")
+                    cp1, cp2 = st.columns(2)
+                    with cp1:
+                        if st.button(" Continuar"):
+                            try:
+                                st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
+                                st.session_state.timer_running = True
+                                supabase.table("active_timers").update({
+                                    "is_running": True, "start_time": st.session_state.timer_start.isoformat(),
+                                    "description": descripcion, "is_billable": es_facturable
+                                }).eq("id", st.session_state.active_timer_id).execute()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f" Error al continuar: {str(e)}")
+                    with cp2:
+                        if st.button(" Descartar"):
+                            try:
+                                if st.session_state.active_timer_id:
+                                    supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
+                                limpiar_estado_timer()
+                                st.session_state.form_key_suffix += 1
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f" Error al descartar: {str(e)}")
+                else:
+                    if st.button(" Iniciar Cronómetro", disabled=not (can_register and form_valido)):
+                        try:
+                            st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
+                            st.session_state.timer_running = True
+                            resp = supabase.table("active_timers").insert({
+                                "user_id": st.session_state.user.id, "project_id": p_id,
+                                "start_time": st.session_state.timer_start.isoformat(),
+                                "description": descripcion, "is_billable": es_facturable, "is_running": True
+                            }).execute()
+                            if resp.data:
+                                st.session_state.active_timer_id = resp.data[0]['id']
+                                st.session_state.active_project_id = p_id
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error iniciando cronómetro: {str(e)}")
+
+def limpiar_estado_timer():
+    st.session_state.timer_running = False
+    st.session_state.total_elapsed = 0
+    st.session_state.timer_start = None
+    st.session_state.active_timer_id = None
+    st.session_state.active_project_id = None
+    st.session_state.active_project_name = None
+    st.session_state.active_client_name = None
+    st.session_state.active_timer_description = ''
+    st.session_state.active_timer_billable = True
+
+def mostrar_historial_tiempos():
+    st.subheader(" Historial de Horas")
     query = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, clients(name))").order("start_time", desc=True)
     if not st.session_state.is_admin:
         limite_30_dias = (get_lima_now() - timedelta(days=30)).isoformat()
         query = query.eq("profile_id", st.session_state.user.id).gte("start_time", limite_30_dias)
     
     entries_resp = query.execute()
-    
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
-        
-        # SANEAMIENTO HORARIO GLOBAL (Garantizar UTC-5 Lima/Bogotá)
-        def to_local_manual(s):
-            if pd.isna(s) or s == 'nan' or not s: return None
-            try:
-                # Parsear como UTC, convertir a Lima, y quitar info de TZ para Streamlit
-                return pd.to_datetime(s, utc=True).tz_convert('America/Lima').tz_localize(None)
-            except:
-                try:
-                    # Fallback manual si tz_convert falla (Shift -5h)
-                    return pd.to_datetime(s).replace(tzinfo=None) - pd.Timedelta(hours=5)
-                except:
-                    return None
+        def to_local(s):
+            if pd.isna(s) or not s: return None
+            try: return pd.to_datetime(s, utc=True).tz_convert('America/Lima').tz_localize(None)
+            except: return pd.to_datetime(s).replace(tzinfo=None) - pd.Timedelta(hours=5)
 
         df['dt_ref'] = df['start_time'].fillna(df['created_at'])
-        df['dt_start_naive'] = df['dt_ref'].apply(to_local_manual)
-        df['dt_end_naive'] = df['end_time'].apply(to_local_manual)
-        
-        df['Inicio'] = df['dt_start_naive'].dt.strftime('%H:%M').fillna('---')
-        df['Fin'] = df['dt_end_naive'].dt.strftime('%H:%M').fillna('---')
-        df['Fecha'] = df['dt_start_naive'].dt.strftime('%d.%m-%Y').fillna('---')
-        df['Tiempo (hh:mm)'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
-        
-        # Mapeo de nombres seguro
-        df['Cliente'] = df['projects.clients.name'].fillna('Desconocido')
-        df['Proyecto'] = df['projects.name'].fillna('Desconocido')
-        df['Usuario_Nombre'] = df['profiles.full_name'].fillna('...')
+        df['dt_st'] = df['dt_ref'].apply(to_local)
+        df['dt_en'] = df['end_time'].apply(to_local)
+        df['Inicio'] = df['dt_st'].dt.strftime('%H:%M').fillna('---')
+        df['Fin'] = df['dt_en'].dt.strftime('%H:%M').fillna('---')
+        df['Fecha'] = df['dt_st'].dt.strftime('%d.%m-%Y').fillna('---')
+        df['Tiempo'] = df['total_minutes'].apply(lambda x: f"{int(x)//60:02d}:{int(x)%60:02d}")
+        df['Cliente'] = df['projects.clients.name'].fillna('...')
+        df['Proyecto'] = df['projects.name'].fillna('...')
+        df['Usuario'] = df['profiles.full_name'].fillna('...')
         
         if st.session_state.is_admin:
             rates_resp = supabase.table("project_rates").select("*").execute()
             rates_df = pd.DataFrame(rates_resp.data)
-            
-            def calc_billing(row):
+            def calc_metrics(row):
                 rate = 0.0
                 if not rates_df.empty:
                     r = rates_df[(rates_df['project_id'] == row['project_id']) & (rates_df['role_id'] == row['profiles.role_id'])]
                     rate = float(r['rate'].iloc[0]) if not r.empty else 0.0
-                c_total = (row['total_minutes'] / 60) * rate
-                return pd.Series([rate, c_total, c_total if row['is_billable'] else 0.0])
-
-            df[['Costo Hora', 'Costo Total', 'Costo Facturable']] = df.apply(calc_billing, axis=1)
-            # Redondeo fsico
-            df['Costo Hora'] = df['Costo Hora'].fillna(0).round(2)
-            df['Costo Total'] = df['Costo Total'].fillna(0).round(2)
-            df['Costo Facturable'] = df['Costo Facturable'].fillna(0).round(2)
+                total = (row['total_minutes'] / 60) * rate
+                return pd.Series([rate, total, total if row['is_billable'] else 0.0])
+            df[['Costo Hora', 'Total', 'Facturable']] = df.apply(calc_metrics, axis=1)
             
-            display_cols = ['Fecha', 'Usuario_Nombre', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo (hh:mm)', 'Costo Hora', 'is_billable', 'Costo Total', 'Costo Facturable', 'is_paid', 'invoice_number']
-            col_names = ['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Detalle', 'Hora Inicio', 'Hora Final', 'Tiempo', 'Costo Hora', 'Facturable', 'Costo Total', 'Costo Facturable', 'Cobrado?', 'Factura #']
+            display_cols = ['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'is_billable', 'Total', 'Facturable', 'is_paid', 'invoice_number']
+            final_df = df[display_cols].rename(columns={'description': 'Detalle', 'is_billable': 'Facturable', 'is_paid': 'Cobrado?'})
             
-            # Renombrar primero
-            df_renamed = df[display_cols].rename(columns=dict(zip(display_cols, col_names)))
+            edited_df = st.data_editor(final_df, use_container_width=True, hide_index=True,
+                column_config={"Facturable": st.column_config.CheckboxColumn(label="Facturable")},
+                disabled=['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Detalle', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'Total', 'Facturable'])
             
-            # Configuracin con nombres FINALES (despus del renombrado)
-            col_cfg_hist = {
-                "Costo Hora": st.column_config.NumberColumn(format="%.2f"),
-                "Costo Total": st.column_config.NumberColumn(format="%.2f"),
-                "Costo Facturable": st.column_config.NumberColumn(format="%.2f"),
-                "Facturable": st.column_config.CheckboxColumn(label="")
-            }
-
-            edited_df = st.data_editor(
-                df_renamed,
-                column_config=col_cfg_hist,
-                use_container_width=True, hide_index=True,
-                disabled=[c for c in col_names if c not in ['Cobrado?', 'Factura #', 'Facturable']]
-            )
-            
-            if st.button("Guardar Cambios Administrativos"):
-                for i, row in edited_df.iterrows():
-                    orig = df.iloc[i]
-                    if row['Cobrado?'] != orig['is_paid'] or row['Factura #'] != orig['invoice_number'] or row['Facturable'] != orig['is_billable']:
-                        supabase.table("time_entries").update({
-                            "is_paid": row['Cobrado?'], "invoice_number": row['Factura #'], "is_billable": row['Facturable']
-                        }).eq("id", orig['id']).execute()
-                st.success(" Cambios guardados.")
+            if st.button("Guardar Cambios Historial"):
+                for idx, row in edited_df.iterrows():
+                    orig = df.iloc[idx]
+                    if row['Cobrado?'] != orig['is_paid'] or row['invoice_number'] != orig['invoice_number']:
+                        supabase.table("time_entries").update({"is_paid": row['Cobrado?'], "invoice_number": row['invoice_number']}).eq("id", orig['id']).execute()
+                st.success("Cambios guardados.")
                 st.rerun()
         else:
-            # Vista simplificada para Usuario
-            display_cols = ['Fecha', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo (hh:mm)']
-            col_names = ['Fecha', 'Cliente', 'Proyecto', 'Detalle', 'Hora Inicio', 'Hora Final', 'Tiempo']
-            
-            st.dataframe(
-                df[display_cols].rename(columns=dict(zip(display_cols, col_names))),
-                use_container_width=True, hide_index=True
-            )
+            view_cols = ['Fecha', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo']
+            st.dataframe(df[view_cols].rename(columns={'description': 'Detalle'}), use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay registros recientes.")
 
 # --- RECUERDO DE SESIÓN ---
 if not st.session_state.user and not st.session_state.get('logout_requested'):
