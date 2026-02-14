@@ -608,6 +608,7 @@ else:
             st.rerun()
 
     if st.session_state.is_admin:
+        global HAS_OPENPYXL
         menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas", "Facturación y Reportes", "Carga Masiva"]
         choice = st.sidebar.selectbox("Seleccione Módulo", menu)
 
@@ -1002,7 +1003,6 @@ else:
                     st.rerun()
 
         elif choice == "Carga Masiva":
-            global HAS_OPENPYXL
             st.header(" Carga Masiva de Datos")
             
             # Tabs para diferentes tipos de carga
