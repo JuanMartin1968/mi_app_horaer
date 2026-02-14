@@ -98,6 +98,8 @@ def get_supabase():
     return create_client(url, service_key if service_key else key)
 
 supabase = get_supabase()
+# Inicializar CookieManager al principio de todo (CRITICAL PARA IOS)
+cookie_manager = xtc.CookieManager()
 
 # Estilos premium
 st.markdown("""
@@ -140,6 +142,8 @@ def login_user(email, password):
             # Guardar cookie para persistencia (App Nativa Experience)
             try:
                 cookie_manager.set('user_id_persist', response.user.id, expires_at=datetime.now() + timedelta(days=30))
+                st.success(" Sesión iniciada y recordada.")
+                time.sleep(0.5) # Pequeña pausa para asegurar que el componente procese la cookie
             except: pass
             
             st.rerun()
@@ -598,21 +602,24 @@ def mostrar_registro_tiempos():
                 use_container_width=True, hide_index=True
             )
 
-# --- CUERPO PRINCIPAL ---
-cookie_manager = xtc.CookieManager()
-
-# Intentar recuperación de sesión AUTOMÁTICA (App Nativa)
+# --- RECUERDO DE SESIÓN ---
+# Intentar recuperación de sesión AUTOMÁTICA (App Nativa Experience)
 if not st.session_state.user:
-    u_id = cookie_manager.get('user_id_persist')
-    if u_id:
-        try:
-            profile = supabase.table("profiles").select("*, roles(name)").eq("id", u_id).single().execute()
-            if profile and profile.data and profile.data.get('is_active'):
-                st.session_state.user = SimpleNamespace(id=u_id) # Mock user object
-                st.session_state.profile = profile.data
-                st.session_state.is_admin = profile.data.get('is_admin', False) or (profile.data.get('account_type') == "Administrador")
-                st.rerun()
-        except: pass
+    with st.spinner("⏳ Conectando..."):
+        u_id = cookie_manager.get('user_id_persist')
+        if u_id:
+            try:
+                profile_res = supabase.table("profiles").select("*, roles(name)").eq("id", u_id).single().execute()
+                if profile_res and profile_res.data and profile_res.data.get('is_active'):
+                    st.session_state.user = SimpleNamespace(id=u_id)
+                    st.session_state.profile = profile_res.data
+                    st.session_state.is_admin = profile_res.data.get('is_admin', False) or (profile_res.data.get('account_type') == "Administrador")
+                    st.rerun()
+            except:
+                pass
+
+# Eliminar inicialización duplicada
+# cookie_manager = xtc.CookieManager()
 
 if not st.session_state.user:
     st.subheader("Acceso al Sistema")
