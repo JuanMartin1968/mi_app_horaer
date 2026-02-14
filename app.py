@@ -66,10 +66,10 @@ if os.path.exists(env_path):
 else:
     load_dotenv() # Fallback por si acaso
 
-# Configuracin de la pgina
+# Configuración de la página
 st.set_page_config(
     page_title="Control Horas - ER",
-    page_icon="",
+    page_icon="⌚",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -112,29 +112,31 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Lgica de Login
+# Lógica de Login
 def login_user(email, password):
     try:
         response = supabase.auth.sign_in_with_password({"email": email, "password": password})
         if response.user:
-            # Fetch profile with account_type and role
-            profile = supabase.table("profiles").select("*, roles(name)").eq("id", response.user.id).single().execute()
-            p_data = profile.data
+            # Fetch profile with roles
+            try:
+                profile = supabase.table("profiles").select("*, roles(name)").eq("id", response.user.id).single().execute()
+                p_data = profile.data if profile else None
+            except Exception as pe:
+                st.error(f" Error recuperando perfil: {str(pe)}")
+                return
             
-            # Validar si est activo
-            if not p_data.get('is_active', False):
-                st.error(" Usuario desactivado. Por favor contacte al administrador.")
+            if not p_data or not p_data.get('is_active', False):
+                st.error(" Usuario inexistente o desactivado. Contacte al administrador.")
                 return
 
             st.session_state.user = response.user
             st.session_state.profile = p_data
-            # Administrador si tiene check o por fallback de tipo de cuenta
             is_admin_check = p_data.get('is_admin', False)
             acc_type = p_data.get('account_type', '')
             st.session_state.is_admin = is_admin_check or (acc_type == "Administrador")
             st.rerun()
     except Exception as e:
-        st.error("Error de acceso: Verifica tus datos.")
+        st.error(f" Error de acceso: {str(e)}")
 
 # Sidebar y Ttulo
 st.title(" Control Horas - ER")
@@ -242,7 +244,7 @@ def mostrar_registro_tiempos():
         t_inicio_str = st.text_input("Hora Inicio (HH:mm)", value="08:00", key=f"hi_{st.session_state.form_key_suffix}")
         t_fin_str = st.text_input("Hora Final (HH:mm)", value="09:00", key=f"hf_{st.session_state.form_key_suffix}")
         
-        if st.button("Registrar Manualmente", disabled=not can_register):
+        if st.button("Registrar Manualmente", disabled=not can_register, use_container_width=True):
             try:
                 # Validar formatos
                 t1_dt = datetime.strptime(t_inicio_str, "%H:%M")
@@ -273,9 +275,11 @@ def mostrar_registro_tiempos():
                     st.session_state.active_client_name = None
                     st.session_state.active_project_name = None
                     
-                    st.session_state.success_msg = f" Guardado con xito ({t_inicio_str} a {t_fin_str})."
+                    st.session_state.success_msg = f" Guardado con éxito ({t_inicio_str} a {t_fin_str})."
                     st.session_state.form_key_suffix += 1
                     st.rerun()
+            except Exception as e:
+                st.error(f" Error al registrar: {str(e)}")
             except ValueError:
                 st.error("Formato invlido. Use HH:mm (ej: 08:33)")
 
@@ -287,26 +291,29 @@ def mostrar_registro_tiempos():
         if 'total_elapsed' not in st.session_state: st.session_state.total_elapsed = 0
         if 'active_timer_id' not in st.session_state: st.session_state.active_timer_id = None
 
-        # Sincronizacin inicial con la base de datos (solo una vez por sesin o si no hay timer local)
+        # Sincronización inicial con la base de datos (solo una vez por sesión o si no hay timer local)
         if st.session_state.active_timer_id is None and st.session_state.user:
             try:
                 # Query expandida para obtener nombres de cliente/proyecto
                 timer_q = supabase.table("active_timers").select("*, projects(name, client_id, clients(name))").eq("user_id", st.session_state.user.id).execute()
-                if timer_q.data:
+                if timer_q and timer_q.data:
                     t_data = timer_q.data[0]
-                    st.session_state.active_timer_id = t_data['id']
-                    st.session_state.timer_running = t_data['is_running']
-                    st.session_state.timer_start = pd.to_datetime(t_data['start_time']).replace(tzinfo=None)
-                    st.session_state.total_elapsed = t_data['total_elapsed_seconds']
-                    # Persistencia de formulario
-                    st.session_state.active_project_id = t_data['project_id']
-                    st.session_state.active_project_name = t_data['projects']['name']
-                    st.session_state.active_client_name = t_data['projects']['clients']['name']
-                    st.session_state.active_timer_description = t_data.get('description', '')
-                    st.session_state.active_timer_billable = t_data.get('is_billable', True)
-                    st.rerun() # Rerun para que los selectores se actualicen con los nuevos ndices
+                    # Solo sincronizar si está corriendo o tiene tiempo guardado
+                    if t_data['is_running'] or t_data['total_elapsed_seconds'] > 0:
+                        st.session_state.active_timer_id = t_data['id']
+                        st.session_state.timer_running = t_data['is_running']
+                        st.session_state.timer_start = pd.to_datetime(t_data['start_time']).replace(tzinfo=None)
+                        st.session_state.total_elapsed = t_data['total_elapsed_seconds']
+                        # Persistencia de formulario
+                        st.session_state.active_project_id = t_data['project_id']
+                        st.session_state.active_project_name = t_data['projects']['name']
+                        st.session_state.active_client_name = t_data['projects']['clients']['name']
+                        st.session_state.active_timer_description = t_data.get('description', '')
+                        st.session_state.active_timer_billable = t_data.get('is_billable', True)
+                        st.rerun()
             except Exception as e:
-                st.error(f"Error sincronizando cronmetro: {str(e)}")
+                # Error silencioso en carga para no interrumpir el flujo
+                pass
 
         # CONTROL DE VISIBILIDAD DE CRONMETRO ACTIVO
         # Solo mostrar si el proyecto seleccionado coincide con el timer de la DB
@@ -323,24 +330,72 @@ def mostrar_registro_tiempos():
             mins, secs = divmod(rem, 60)
             st.metric(" EN VIVO (Cronometrando)", f"{hrs:02d}:{mins:02d}:{secs:02d}")
 
-            col_t1, col_t2 = st.columns(2)
+            col_t1, col_t2, col_t3 = st.columns(3)
             with col_t1:
-                if st.button(" Pausar"):
-                    new_elapsed = st.session_state.total_elapsed + (get_lima_now().replace(tzinfo=None) - st.session_state.timer_start).total_seconds()
-                    st.session_state.total_elapsed = new_elapsed
-                    st.session_state.timer_running = False
-                    # Actualizar DB con descripción y facturabilidad actual
-                    if st.session_state.active_timer_id:
-                        supabase.table("active_timers").update({
-                            "is_running": False,
-                            "total_elapsed_seconds": int(new_elapsed),
-                            "description": descripcion,
-                            "is_billable": es_facturable
-                        }).eq("id", st.session_state.active_timer_id).execute()
-                    st.rerun()
+                if st.button(" || Pausar", use_container_width=True):
+                    try:
+                        t_now = get_lima_now().replace(tzinfo=None)
+                        new_elapsed = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
+                        st.session_state.total_elapsed = new_elapsed
+                        st.session_state.timer_running = False
+                        # Actualizar DB
+                        if st.session_state.active_timer_id:
+                            supabase.table("active_timers").update({
+                                "is_running": False,
+                                "total_elapsed_seconds": int(new_elapsed),
+                                "description": descripcion,
+                                "is_billable": es_facturable
+                            }).eq("id", st.session_state.active_timer_id).execute()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f" Error al pausar: {str(e)}")
             
             with col_t2:
-                if st.button(" Finalizar", disabled=not can_register):
+                if st.button(" 🔄 Sincronizar", use_container_width=True, help="Fuerza la actualización si el tiempo se ve estático"):
+                    st.rerun()
+            
+            with col_t3:
+                if st.button(" Finalizar", disabled=not can_register, use_container_width=True, type="primary"):
+                    try:
+                        t_now = get_lima_now().replace(tzinfo=None)
+                        total_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
+                        total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
+                        
+                        tz_local = timezone(timedelta(hours=-5))
+                        t_start_local = st.session_state.timer_start - timedelta(seconds=st.session_state.total_elapsed)
+                        start_dt = datetime.combine(fecha_sel, t_start_local.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                        end_dt = start_dt + timedelta(minutes=total_min)
+                        
+                        supabase.table("time_entries").insert({
+                            "profile_id": target_user_id,
+                            "project_id": p_id,
+                            "description": descripcion,
+                            "start_time": start_dt.isoformat(),
+                            "end_time": end_dt.isoformat(),
+                            "total_minutes": total_min,
+                            "is_billable": es_facturable
+                        }).execute()
+                        
+                        # Limpiar DB
+                        if st.session_state.active_timer_id:
+                            supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
+
+                        # LIMPIEZA TOTAL DE ESTADO
+                        st.session_state.timer_running = False
+                        st.session_state.total_elapsed = 0
+                        st.session_state.timer_start = None
+                        st.session_state.active_timer_id = None
+                        st.session_state.active_project_id = None
+                        st.session_state.active_project_name = None
+                        st.session_state.active_client_name = None
+                        st.session_state.active_timer_description = ''
+                        st.session_state.active_timer_billable = True
+                        
+                        st.session_state.success_msg = " Registro con cronómetro guardado y pantalla limpiada."
+                        st.session_state.form_key_suffix += 1
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f" Error al finalizar: {str(e)}")
                     t_now = get_lima_now().replace(tzinfo=None)
                     total_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
                     total_min = int(total_sec // 60) + (1 if total_sec % 60 > 0 else 0)
@@ -539,7 +594,7 @@ def mostrar_registro_tiempos():
 if not st.session_state.user:
     st.subheader("Acceso al Sistema")
     with st.form("login_form"):
-        email = st.text_input("Correo electrnico")
+        email = st.text_input("Correo electrónico")
         password = st.text_input("Contraseña", type="password")
         if st.form_submit_button("Entrar"):
             login_user(email, password)
@@ -554,7 +609,7 @@ else:
 
     if st.session_state.is_admin:
         menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas", "Facturación y Reportes", "Carga Masiva"]
-        choice = st.sidebar.selectbox("Seleccione Mdulo", menu)
+        choice = st.sidebar.selectbox("Seleccione Módulo", menu)
 
         if choice == "Panel General":
             st.header(" Panel General de Horas")
@@ -956,7 +1011,21 @@ else:
                 st.subheader("Carga Masiva de Registros de Tiempo")
                 st.info(" **Formato requerido**: Fecha | Responsable | Cliente | Proyecto | Detalle | Hora Inicio | Hora Final")
                 
-                # Botn para descargar template
+                # Gestión proactiva de librerías
+                global HAS_OPENPYXL
+                if not HAS_OPENPYXL:
+                    try:
+                        import openpyxl
+                        HAS_OPENPYXL = True
+                    except:
+                        pass
+                
+                if not HAS_OPENPYXL:
+                    st.warning(" ⚠️ La función de carga masiva requiere 'openpyxl'.")
+                    if st.button(" 🔄 Re-intentar detectar librerías"):
+                        st.rerun()
+                
+                # Botón para descargar template
                 if HAS_OPENPYXL:
                     template_time = pd.DataFrame({
                         'Fecha': ['06.02-2026', '06.02-2026'],
