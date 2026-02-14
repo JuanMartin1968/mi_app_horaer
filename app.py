@@ -188,12 +188,6 @@ if 'logout_requested' not in st.session_state:
 
 # Función reutilizable para el Registro de Tiempos
 def mostrar_registro_tiempos():
-    # 0. TABLA DE HISTORIAL (Carga automática e inmediata al entrar)
-    mostrar_historial_tiempos()
-    
-    st.markdown("---")
-    st.subheader("⏱️ Registrar Nuevo Tiempo")
-    
     # Manejo de mensajes persistentes tras rerun
     if 'success_msg' in st.session_state:
         st.toast(st.session_state.success_msg, icon="✅")
@@ -227,7 +221,7 @@ def mostrar_registro_tiempos():
                     st.rerun()
         except: pass
     
-    # 1. Selección de Cliente (Siempre visible debajo del historial)
+    # 1. Selección de Cliente (Siempre visible)
     clientes_resp = supabase.table("clients").select("id, name").order("name").execute()
     if not clientes_resp.data:
         st.info("Aún no hay clientes registrados.")
@@ -444,6 +438,10 @@ def mostrar_registro_tiempos():
                         except Exception as e:
                             st.error(f"Error iniciando cronómetro: {str(e)}")
 
+    # 4. TABLA DE HISTORIAL (Siempre visible al final)
+    st.markdown("---")
+    mostrar_historial_tiempos()
+
 def limpiar_estado_timer():
     st.session_state.timer_running = False
     st.session_state.total_elapsed = 0
@@ -491,14 +489,14 @@ def mostrar_historial_tiempos():
                     rate = float(r['rate'].iloc[0]) if not r.empty else 0.0
                 total = (row['total_minutes'] / 60) * rate
                 return pd.Series([rate, total, total if row['is_billable'] else 0.0])
-            df[['Costo Hora', 'Total', 'Facturable']] = df.apply(calc_metrics, axis=1)
+            df[['Costo Hora', 'Total Bruto', 'Monto Facturable']] = df.apply(calc_metrics, axis=1)
             
-            display_cols = ['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'is_billable', 'Total', 'Facturable', 'is_paid', 'invoice_number']
-            final_df = df[display_cols].rename(columns={'description': 'Detalle', 'is_billable': 'Facturable', 'is_paid': 'Cobrado?'})
+            display_cols = ['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'description', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'is_billable', 'Total Bruto', 'Monto Facturable', 'is_paid', 'invoice_number']
+            final_df = df[display_cols].rename(columns={'description': 'Detalle', 'is_billable': '¿Fact?', 'is_paid': 'Cobrado?'})
             
             edited_df = st.data_editor(final_df, use_container_width=True, hide_index=True,
-                column_config={"Facturable": st.column_config.CheckboxColumn(label="Facturable")},
-                disabled=['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Detalle', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'Total', 'Facturable'])
+                column_config={"¿Fact?": st.column_config.CheckboxColumn(label="Fact?")},
+                disabled=['Fecha', 'Usuario', 'Cliente', 'Proyecto', 'Detalle', 'Inicio', 'Fin', 'Tiempo', 'Costo Hora', 'Total Bruto', '¿Fact?', 'Monto Facturable'])
             
             if st.button("Guardar Cambios Historial"):
                 for idx, row in edited_df.iterrows():
