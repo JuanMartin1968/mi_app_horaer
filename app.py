@@ -178,6 +178,13 @@ def login_user(email, password):
     except Exception as e:
         st.error(f" Error de acceso: {str(e)}")
 
+@st.cache_data(ttl=300, show_spinner=False)
+def get_clientes_cached():
+    try:
+        return supabase.table("clients").select("id, name").order("name").execute()
+    except:
+        return None
+
 # Sidebar y Ttulo
 st.title(" Control Horas - ER")
 
@@ -221,10 +228,17 @@ def mostrar_registro_tiempos():
                     st.rerun()
         except: pass
     
+        except: pass
+    
     # 1. Selección de Cliente (Siempre visible)
-    clientes_resp = supabase.table("clients").select("id, name").order("name").execute()
-    if not clientes_resp.data:
-        st.info("Aún no hay clientes registrados.")
+    clientes_resp = None
+    for _ in range(3): # Simple retry logic
+        clientes_resp = get_clientes_cached()
+        if clientes_resp: break
+        time.sleep(0.5)
+        
+    if not clientes_resp or not clientes_resp.data:
+        st.info("Aún no hay clientes registrados (o error de conexión).")
         return
         
     client_map = {c['name']: c['id'] for c in clientes_resp.data}
