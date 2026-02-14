@@ -98,8 +98,29 @@ def get_supabase():
     return create_client(url, service_key if service_key else key)
 
 supabase = get_supabase()
-# Inicializar gestor de cookies (CRITICAL PARA IOS)
+# Inicializar gestores de memoria (CRITICAL PARA IOS)
 cookie_manager = xtc.CookieManager()
+local_manager = xtc.LocalStorageManager()
+
+# --- TRAMPA DE CIERRE TOTAL (HARD LOGOUT) ---
+# Si detectamos 'logout' en la URL, limpiamos TODO antes de que la app se cargue
+if st.query_params.get("logout") == "1":
+    st.info("🔄 Limpiando sesión de forma segura...")
+    # Limpiar Python
+    st.session_state.user = None
+    st.session_state.logout_requested = True
+    # Limpiar Cookies y LocalStorage vía JS (Lo más agresivo)
+    st.components.v1.html("""
+        <script>
+            localStorage.clear();
+            document.cookie.split(";").forEach(function(c) {
+                document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+            });
+            window.location.search = ""; // Limpiar el ?logout=1 de la URL
+        </script>
+    """, height=0)
+    time.sleep(1.5)
+    st.stop()
 
 # Estilos premium
 st.markdown("""
@@ -140,18 +161,16 @@ def login_user(email, password):
             st.session_state.is_admin = is_admin_check or (acc_type == "Administrador")
             st.session_state.logout_requested = False
             
-            # Inyección de JS para persistencia (document.cookie)
-            # Esto ayuda a Safari/iPhone a procesar la memoria de sesión
+            # Persistencia Nativa: document.cookie (Fuerte) + LocalStorage (Fallback)
             st.components.v1.html(f"""
                 <script>
-                    const val = "{response.user.id}";
-                    const d = new Date();
-                    d.setTime(d.getTime() + (30*24*60*60*1000));
-                    document.cookie = "user_id_persist=" + val + "; expires=" + d.toUTCString() + "; path=/; SameSite=Lax";
+                    const expire = new Date();
+                    expire.setTime(expire.getTime() + (30*24*60*60*1000));
+                    document.cookie = "user_id_persist={response.user.id}; expires=" + expire.toUTCString() + "; path=/;";
+                    localStorage.setItem("user_id_persist", "{response.user.id}");
                 </script>
             """, height=0)
             
-            st.session_state.logout_requested = False
             st.success(" Sesión guardada en este dispositivo.")
             time.sleep(1.0)
             st.rerun()
@@ -573,15 +592,17 @@ def mostrar_registro_tiempos():
 
 # --- RECUERDO DE SESIÓN ---
 if not st.session_state.user and not st.session_state.get('logout_requested'):
-    # 1. Puerta de hidratación para iOS
+    # 1. Puerta de hidratación para componentes de almacenamiento
     if "init_gate" not in st.session_state:
         st.session_state.init_gate = True
-        with st.spinner("⏳ Verificando sesión..."):
+        with st.spinner("⏳ Conectando..."):
             time.sleep(1.0)
             st.rerun()
 
-    # 2. Recuperar u_id de Cookie
+    # 2. Intentar recuperar de Cookie (xtc) o LocalStorage (xtc)
     u_id = cookie_manager.get('user_id_persist')
+    if not u_id:
+        u_id = local_manager.get('user_id_persist')
     
     if u_id:
         try:
@@ -609,28 +630,11 @@ else:
         st.write(f" **{st.session_state.profile['full_name']}**")
         st.write(f" Rol: {st.session_state.profile['roles']['name']}")
         st.write(f" Tipo: {'Administrador' if st.session_state.is_admin else 'Usuario'}")
-        if st.button("Cerrar Sesión"):
-            # 1. Marcar el deseo explícito de salir y parar loops
-            st.session_state.logout_requested = True
-            st.session_state.timer_running = False # PARAR EL LOOP GLOBAL
+        if st.button("🔴 Cerrar Sesión"):
+            # Signal de Hard Logout vía URL
+            st.query_params["logout"] = "1"
             st.session_state.user = None
-            
-            # 2. Intentar borrar cookie por todos los medios (Python + JS + Delay)
-            try:
-                cookie_manager.delete('user_id_persist')
-            except: pass
-            
-            # Inyección de JS para limpiar el navegador
-            st.components.v1.html("""
-                <script>
-                    document.cookie = "user_id_persist=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-                </script>
-            """, height=0)
-            
-            st.info("🔄 Cerrando sesión... por favor espera un segundo.")
-            if "init_gate" in st.session_state: del st.session_state.init_gate
-            
-            time.sleep(1.5) # Pausa crítica para que iPhone/Safari procese el borrado
+            st.session_state.logout_requested = True
             st.rerun()
 
     if st.session_state.is_admin:
