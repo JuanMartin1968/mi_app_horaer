@@ -9,11 +9,11 @@ import textwrap
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
-# Importacin segura de libreras opcionales
+# Importación segura de librerías opcionales
 try:
     import openpyxl
     HAS_OPENPYXL = True
-except ImportError:
+except (ImportError, ModuleNotFoundError):
     HAS_OPENPYXL = False
 
 try:
@@ -24,7 +24,7 @@ try:
 except ImportError:
     HAS_DOCX = False
 
-# Helper para zona horaria (Lima/Bogot UTC-5)
+# Helper para zona horaria (Lima/Bogotá UTC-5)
 def get_lima_now():
     return datetime.now(timezone.utc) - timedelta(hours=5)
 
@@ -42,7 +42,7 @@ def generate_word_letter(texto_completo, firma_resp):
     htable.columns[0].width = Inches(3)
     htable.columns[1].width = Inches(3)
     
-    # Contenido del cuerpo (dividir por saltos de lnea para prrafos)
+    # Contenido del cuerpo (dividir por saltos de línea para prrafos)
     for paragraph in texto_completo.split('\n'):
         if paragraph.strip():
             p = doc.add_paragraph(paragraph.strip())
@@ -92,7 +92,7 @@ def get_supabase():
 
     url, key, service_key = map(clean, [url, key, service_key])
     
-    # Priorizar Service Key para administracin
+    # Priorizar Service Key para administración
     return create_client(url, service_key if service_key else key)
 
 supabase = get_supabase()
@@ -142,22 +142,22 @@ st.title(" Control Horas - ER")
 if 'user' not in st.session_state:
     st.session_state.user = None
 
-# Funcin reutilizable para el Registro de Tiempos
+# Función reutilizable para el Registro de Tiempos
 def mostrar_registro_tiempos():
     st.header(" Registro de Tiempos")
     
     # Manejo de mensajes persistentes tras rerun
     if 'success_msg' in st.session_state:
-        st.toast(st.session_state.success_msg, icon="")
+        st.toast(st.session_state.success_msg, icon="✅")
         del st.session_state.success_msg
     
     # Manejo de keys para borrado
     if 'form_key_suffix' not in st.session_state: st.session_state.form_key_suffix = 0
     
-    # 1. Seleccin de Cliente y Proyecto
+    # 1. Selección de Cliente y Proyecto
     clientes = supabase.table("clients").select("id, name").order("name").execute()
     if not clientes.data:
-        st.info("An no hay clientes registrados.")
+        st.info("Aún no hay clientes registrados.")
         return
         
     client_map = {c['name']: c['id'] for c in clientes.data}
@@ -219,14 +219,14 @@ def mostrar_registro_tiempos():
     
     if current_rate_val <= 0:
         if st.session_state.is_admin:
-            st.warning(f" **Atencin**: No se han definido tarifas para el rol en este proyecto.")
+            st.warning(f" **Atención**: No se han definido tarifas para el rol en este proyecto.")
         can_register = True # Permitir registrar incluso sin tarifa (ser 0)
     else:
         if st.session_state.is_admin:
             st.success(f"Tarifa detectada: **{current_rate_val} {moneda}/h**")
         can_register = True
 
-    # Valor por defecto para descripcin y facturabilidad
+    # Valor por defecto para descripción y facturabilidad
     def_desc = st.session_state.get('active_timer_description', '')
     def_fact = st.session_state.get('active_timer_billable', True)
 
@@ -248,7 +248,7 @@ def mostrar_registro_tiempos():
                 t1_dt = datetime.strptime(t_inicio_str, "%H:%M")
                 t2_dt = datetime.strptime(t_fin_str, "%H:%M")
                 
-                # Considerar UTC-5 (Bogot/Lima) para el ingreso manual
+                # Considerar UTC-5 (Bogotá/Lima) para el ingreso manual
                 tz_local = timezone(timedelta(hours=-5))
                 t1 = datetime.combine(fecha_sel, t1_dt.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
                 t2 = datetime.combine(fecha_sel, t2_dt.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
@@ -329,7 +329,7 @@ def mostrar_registro_tiempos():
                     new_elapsed = st.session_state.total_elapsed + (get_lima_now().replace(tzinfo=None) - st.session_state.timer_start).total_seconds()
                     st.session_state.total_elapsed = new_elapsed
                     st.session_state.timer_running = False
-                    # Actualizar DB con descripcin y facturabilidad actual
+                    # Actualizar DB con descripción y facturabilidad actual
                     if st.session_state.active_timer_id:
                         supabase.table("active_timers").update({
                             "is_running": False,
@@ -388,7 +388,7 @@ def mostrar_registro_tiempos():
                     if st.button(" Continuar"):
                         st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
                         st.session_state.timer_running = True
-                        # Actualizar DB con descripcin y facturabilidad actual
+                        # Actualizar DB con descripción y facturabilidad actual
                         if st.session_state.active_timer_id:
                             supabase.table("active_timers").update({
                                 "is_running": True,
@@ -450,7 +450,7 @@ def mostrar_registro_tiempos():
     if entries_resp.data:
         df = pd.json_normalize(entries_resp.data)
         
-        # SANEAMIENTO HORARIO GLOBAL (Garantizar UTC-5 Lima/Bogot)
+        # SANEAMIENTO HORARIO GLOBAL (Garantizar UTC-5 Lima/Bogotá)
         def to_local_manual(s):
             if pd.isna(s) or s == 'nan' or not s: return None
             try:
@@ -540,7 +540,7 @@ if not st.session_state.user:
     st.subheader("Acceso al Sistema")
     with st.form("login_form"):
         email = st.text_input("Correo electrnico")
-        password = st.text_input("Contrasea", type="password")
+        password = st.text_input("Contraseña", type="password")
         if st.form_submit_button("Entrar"):
             login_user(email, password)
 else:
@@ -553,7 +553,7 @@ else:
             st.rerun()
 
     if st.session_state.is_admin:
-        menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas", "Facturacin y Reportes", "Carga Masiva"]
+        menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas", "Facturación y Reportes", "Carga Masiva"]
         choice = st.sidebar.selectbox("Seleccione Mdulo", menu)
 
         if choice == "Panel General":
@@ -741,7 +741,7 @@ else:
                     if st.form_submit_button("Guardar Cliente"):
                         existente = supabase.table("clients").select("*").or_(f"name.eq.{nombre},doi_number.eq.{doi_num}").execute()
                         if existente.data:
-                            st.error(" Error: Ya existe un cliente con ese nombre o nmero de documento.")
+                            st.error(" Error: Ya existe un cliente con ese nombre o número de documento.")
                         else:
                             supabase.table("clients").insert({
                                 "name": nombre, "doi_type": doi_type, "doi_number": doi_num, 
@@ -828,7 +828,7 @@ else:
             
             with st.form("form_usuario"):
                 u_email = st.text_input("Email (ser su acceso)")
-                u_pass = st.text_input("Contrasea", type="password")
+                u_pass = st.text_input("Contraseña", type="password")
                 u_name = st.text_input("Nombre Completo")
                 u_username = st.text_input("Nombre de Usuario (interno)")
                 u_doi_type = st.selectbox("Tipo DOI", ["DNI", "RUC", "CE", "PASAPORTE"])
@@ -839,7 +839,7 @@ else:
                 
                 if st.form_submit_button("Crear Usuario"):
                     if not u_email or not u_pass:
-                        st.error(" Email y contrasea son obligatorios.")
+                        st.error(" Email y contraseña son obligatorios.")
                     else:
                         try:
                             new_u = supabase.auth.admin.create_user({
@@ -960,7 +960,7 @@ else:
                 if HAS_OPENPYXL:
                     template_time = pd.DataFrame({
                         'Fecha': ['06.02-2026', '06.02-2026'],
-                        'Responsable': ['Juan Prez', 'Mara Garca'],
+                        'Responsable': ['Juan Pérez', 'Mara García'],
                         'Cliente': ['Cliente A', 'Cliente B'],
                         'Proyecto': ['Proyecto X', 'Proyecto Y'],
                         'Detalle': ['Reunin de planificacin', 'Desarrollo de mdulo'],
@@ -972,7 +972,7 @@ else:
                         template_time.to_excel(writer, index=False, sheet_name='Registros')
                     st.download_button(" Descargar Template", data=buffer_template.getvalue(), file_name="template_registros.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 else:
-                    st.warning(" La funcin de descarga de templates requiere 'openpyxl'. Por favor, instlela.")
+                    st.warning(" La función de descarga de templates requiere 'openpyxl'. Por favor, instálela.")
                 
                 uploaded_file = st.file_uploader("Seleccionar archivo Excel", type=['xlsx'], key="upload_time")
                 if uploaded_file and HAS_OPENPYXL:
@@ -1199,8 +1199,8 @@ else:
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-        elif choice == "Facturacin y Reportes":
-            st.header(" Facturacin y Reportes")
+        elif choice == "Facturación y Reportes":
+            st.header(" Facturación y Reportes")
             
             # Filtros de Reporte
             clientes_q = supabase.table("clients").select("id, name, doi_type, doi_number, address").order("name").execute()
@@ -1246,10 +1246,10 @@ else:
                             df_rep['Total_Monto'] = df_rep['Horas_num'] * df_rep['Costo_H']
                             
                             # SELECTOR DE PROYECTOS (Nuevo)
-                            st.markdown("###  Seleccin de Proyectos a Liquidar")
+                            st.markdown("###  Selección de Proyectos a Liquidar")
                             proyectos_disponibles = df_rep['projects.name'].unique().tolist()
                             proyectos_seleccionados = st.multiselect(
-                                "Seleccione los proyectos que desea incluir en esta liquidacin:",
+                                "Seleccione los proyectos que desea incluir en esta liquidación:",
                                 options=proyectos_disponibles,
                                 default=proyectos_disponibles  # Por defecto todos seleccionados
                             )
@@ -1258,7 +1258,7 @@ else:
                                 # Filtrar dataframe por proyectos seleccionados
                                 df_rep = df_rep[df_rep['projects.name'].isin(proyectos_seleccionados)]
                             
-                                tab1, tab2, tab3 = st.tabs([" Carta de Liquidacin", " Anexo Detallado", " Dashboard"])
+                                tab1, tab2, tab3 = st.tabs([" Carta de Liquidación", " Anexo Detallado", " Dashboard"])
                             
                                 with tab1:
                                     monedas_disp = [m for m in df_rep['projects.currency'].unique() if pd.notna(m) and str(m) != 'nan']
@@ -1280,9 +1280,9 @@ else:
                                         
                                         # ===== CONTROL DE LIQUIDACIN =====
                                         st.markdown("---")
-                                        st.markdown("###  Control de Liquidacin")
+                                        st.markdown("###  Control de Liquidación")
                                         
-                                        # Verificar liquidacin existente
+                                        # Verificar liquidación existente
                                         existing_liq = supabase.table("liquidations").select("*").eq("client_id", cli_data['id']).eq("period_start", start_d.isoformat()).eq("period_end", end_d.isoformat()).eq("currency", moneda_liq).execute()
                                         
                                         liquidation_number = None
@@ -1294,15 +1294,15 @@ else:
                                             liquidation_number = liq_data['liquidation_number']
                                             liquidation_id = liq_data['id']
                                             liquidation_status = liq_data.get('status', 'draft')
-                                            st.info(f" Liquidacin existente: **{liquidation_number}** | Estado: **{liquidation_status.upper()}**")
+                                            st.info(f" Liquidación existente: **{liquidation_number}** | Estado: **{liquidation_status.upper()}**")
                                         else:
-                                            st.caption(" No se ha generado nmero de liquidacin. Se generar al guardar.")
+                                            st.caption(" No se ha generado número de liquidación. Se generará al guardar.")
                                         
                                         # Campo para notas especiales (descuentos, condiciones, etc.)
                                         st.markdown("#####  Notas Especiales (Opcional)")
                                         st.caption("Agregue aqu descuentos, condiciones especiales o cualquier texto adicional que desee incluir en la carta.")
                                         notas_especiales = st.text_area(
-                                            "Notas adicionales para esta liquidacin:",
+                                            "Notas adicionales para esta liquidación:",
                                             placeholder="Ejemplo: Se aplic un descuento del 10% por volumen de horas.\nO: Monto neto a pagar: USD 5,400.00 (despus de descuento de USD 600.00)",
                                             height=100,
                                             key=f"notas_{cli_name_sel}_{moneda_liq}",
@@ -1314,10 +1314,10 @@ else:
                                         if notas_especiales and notas_especiales.strip():
                                             seccion_notas = f"\n\n{notas_especiales.strip()}"
                                         
-                                        # Construir referencia con nmero
-                                        ref_line = "Ref.: Liquidacin de Honorarios"
+                                        # Construir referencia con número
+                                        ref_line = "Ref.: Liquidación de Honorarios"
                                         if liquidation_number:
-                                            ref_line = f"Ref.: Liquidacin de Honorarios N {liquidation_number}"
+                                            ref_line = f"Ref.: Liquidación de Honorarios N {liquidation_number}"
                                         
                                         # Plantilla de Carta basada en PDF Hoja 1
                                         fecha_carta = get_lima_now().strftime('%d de %B de %Y')
@@ -1332,7 +1332,7 @@ Estimado(s) seor(es):
 
 Nos dirigimos a usted(es) con el propsito de saludarlo(s) cordialmente y remitir la {ref_line}, por la suma neta de {moneda_liq} {total_general_liq:,.2f}, ms el Impuesto General a las Ventas.
 
-El detalle de las actividades efectivamente ejecutadas a favor de usted(es) se encuentra consignado en la liquidacin de horas que se adjunta a esta comunicacin. En tal sentido, agradeceremos se sirvan revisar detenidamente la informacin anexada.{seccion_notas}
+El detalle de las actividades efectivamente ejecutadas a favor de usted(es) se encuentra consignado en la liquidación de horas que se adjunta a esta comunicación. En tal sentido, agradeceremos se sirvan revisar detenidamente la información anexada.{seccion_notas}
 
 Para el pago de los honorarios y de la respectiva detraccin, srvanse tener en cuenta los siguientes datos:
 
@@ -1352,14 +1352,14 @@ Responsable"""
                                         st.markdown("##### Editor de Carta")
                                         full_letter_text = st.text_area("Contenido", value=letter_template, height=450)
                                         
-                                        # Botones para guardar liquidacin
+                                        # Botones para guardar liquidación
                                         st.markdown("---")
                                         col_save1, col_save2, col_save3 = st.columns([1, 1, 1])
                                         
                                         with col_save1:
-                                            if st.button(" Guardar Liquidacin", type="primary", help="Guardar liquidacin y generar nmero correlativo"):
+                                            if st.button(" Guardar Liquidación", type="primary", help="Guardar liquidación y generará número correlativo"):
                                                 try:
-                                                    # Generar nmero si no existe
+                                                    # Generar número si no existe
                                                     if not liquidation_number:
                                                         result = supabase.rpc('get_next_liquidation_number').execute()
                                                         liquidation_number = result.data
@@ -1379,11 +1379,11 @@ Responsable"""
                                                     
                                                     if liquidation_id:
                                                         supabase.table("liquidations").update(liq_data_to_save).eq("id", liquidation_id).execute()
-                                                        st.success(f" Liquidacin {liquidation_number} actualizada")
+                                                        st.success(f" Liquidación {liquidation_number} actualizada")
                                                     else:
                                                         liq_data_to_save["liquidation_number"] = liquidation_number
                                                         supabase.table("liquidations").insert(liq_data_to_save).execute()
-                                                        st.success(f" Liquidacin {liquidation_number} guardada")
+                                                        st.success(f" Liquidación {liquidation_number} guardada")
                                                     
                                                     st.rerun()
                                                 except Exception as e:
@@ -1461,7 +1461,7 @@ Responsable"""
                                     sum_df['Tiempo'] = sum_df['Horas_num'].apply(lambda h: f"{int(h)}h {int((h*60)%60)}m")
                                     st.dataframe(sum_df, column_config={"Total_Monto": st.column_config.NumberColumn(format="%.2f")}, use_container_width=True, hide_index=True)
                             else:
-                                st.warning(" Debe seleccionar al menos un proyecto para generar la liquidacin.")
+                                st.warning(" Debe seleccionar al menos un proyecto para generará la liquidación.")
 
                     else:
                         st.info("No se encontraron registros para este cliente.")
