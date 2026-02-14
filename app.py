@@ -610,22 +610,27 @@ else:
         st.write(f" Rol: {st.session_state.profile['roles']['name']}")
         st.write(f" Tipo: {'Administrador' if st.session_state.is_admin else 'Usuario'}")
         if st.button("Cerrar Sesión"):
-            # 1. Marcar el deseo explícito de salir
+            # 1. Marcar el deseo explícito de salir y parar loops
             st.session_state.logout_requested = True
+            st.session_state.timer_running = False # PARAR EL LOOP GLOBAL
             st.session_state.user = None
             
-            # 2. Intentar borrar cookie por todos los medios
+            # 2. Intentar borrar cookie por todos los medios (Python + JS + Delay)
             try:
                 cookie_manager.delete('user_id_persist')
             except: pass
             
+            # Inyección de JS para limpiar el navegador
             st.components.v1.html("""
                 <script>
                     document.cookie = "user_id_persist=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
                 </script>
             """, height=0)
             
+            st.info("🔄 Cerrando sesión... por favor espera un segundo.")
             if "init_gate" in st.session_state: del st.session_state.init_gate
+            
+            time.sleep(1.5) # Pausa crítica para que iPhone/Safari procese el borrado
             st.rerun()
 
     if st.session_state.is_admin:
@@ -1563,6 +1568,6 @@ Responsable"""
 
 # --- REFRESH DINMICO (Al final para no bloquear UI) ---
 
-if st.session_state.get('timer_running'):
+if st.session_state.get('user') and st.session_state.get('timer_running') and not st.session_state.get('logout_requested'):
     time.sleep(1)
     st.rerun()
