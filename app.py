@@ -1002,6 +1002,7 @@ else:
                     st.rerun()
 
         elif choice == "Carga Masiva":
+            global HAS_OPENPYXL
             st.header(" Carga Masiva de Datos")
             
             # Tabs para diferentes tipos de carga
@@ -1012,7 +1013,6 @@ else:
                 st.info(" **Formato requerido**: Fecha | Responsable | Cliente | Proyecto | Detalle | Hora Inicio | Hora Final")
                 
                 # Gestión proactiva de librerías
-                global HAS_OPENPYXL
                 if not HAS_OPENPYXL:
                     try:
                         import openpyxl
