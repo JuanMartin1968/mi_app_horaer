@@ -8,6 +8,8 @@ import io
 import textwrap
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+from types import SimpleNamespace
+import extra_streamlit_components as xtc
 
 # Importación segura de librerías opcionales
 try:
@@ -134,6 +136,12 @@ def login_user(email, password):
             is_admin_check = p_data.get('is_admin', False)
             acc_type = p_data.get('account_type', '')
             st.session_state.is_admin = is_admin_check or (acc_type == "Administrador")
+            
+            # Guardar cookie para persistencia (App Nativa Experience)
+            try:
+                cookie_manager.set('user_id_persist', response.user.id, expires_at=datetime.now() + timedelta(days=30))
+            except: pass
+            
             st.rerun()
     except Exception as e:
         st.error(f" Error de acceso: {str(e)}")
@@ -591,6 +599,21 @@ def mostrar_registro_tiempos():
             )
 
 # --- CUERPO PRINCIPAL ---
+cookie_manager = xtc.CookieManager()
+
+# Intentar recuperación de sesión AUTOMÁTICA (App Nativa)
+if not st.session_state.user:
+    u_id = cookie_manager.get('user_id_persist')
+    if u_id:
+        try:
+            profile = supabase.table("profiles").select("*, roles(name)").eq("id", u_id).single().execute()
+            if profile and profile.data and profile.data.get('is_active'):
+                st.session_state.user = SimpleNamespace(id=u_id) # Mock user object
+                st.session_state.profile = profile.data
+                st.session_state.is_admin = profile.data.get('is_admin', False) or (profile.data.get('account_type') == "Administrador")
+                st.rerun()
+        except: pass
+
 if not st.session_state.user:
     st.subheader("Acceso al Sistema")
     with st.form("login_form"):
@@ -603,7 +626,8 @@ else:
         st.write(f" **{st.session_state.profile['full_name']}**")
         st.write(f" Rol: {st.session_state.profile['roles']['name']}")
         st.write(f" Tipo: {'Administrador' if st.session_state.is_admin else 'Usuario'}")
-        if st.button("Cerrar Sesin"):
+        if st.button("Cerrar Sesión"):
+            cookie_manager.delete('user_id_persist')
             st.session_state.user = None
             st.rerun()
 
