@@ -608,7 +608,6 @@ else:
             st.rerun()
 
     if st.session_state.is_admin:
-        global HAS_OPENPYXL
         menu = ["Panel General", "Registro de Tiempos", "Clientes", "Proyectos", "Usuarios", "Roles y Tarifas", "Facturación y Reportes", "Carga Masiva"]
         choice = st.sidebar.selectbox("Seleccione Módulo", menu)
 
