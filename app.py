@@ -138,6 +138,7 @@ def login_user(email, password):
             is_admin_check = p_data.get('is_admin', False)
             acc_type = p_data.get('account_type', '')
             st.session_state.is_admin = is_admin_check or (acc_type == "Administrador")
+            st.session_state.logout_requested = False
             
             # Inyección de JS para persistencia (document.cookie)
             # Esto ayuda a Safari/iPhone a procesar la memoria de sesión
@@ -150,6 +151,7 @@ def login_user(email, password):
                 </script>
             """, height=0)
             
+            st.session_state.logout_requested = False
             st.success(" Sesión guardada en este dispositivo.")
             time.sleep(1.0)
             st.rerun()
@@ -161,6 +163,8 @@ st.title(" Control Horas - ER")
 
 if 'user' not in st.session_state:
     st.session_state.user = None
+if 'logout_requested' not in st.session_state:
+    st.session_state.logout_requested = False
 
 # Función reutilizable para el Registro de Tiempos
 def mostrar_registro_tiempos():
@@ -568,7 +572,7 @@ def mostrar_registro_tiempos():
             )
 
 # --- RECUERDO DE SESIÓN ---
-if not st.session_state.user:
+if not st.session_state.user and not st.session_state.get('logout_requested'):
     # 1. Puerta de hidratación para iOS
     if "init_gate" not in st.session_state:
         st.session_state.init_gate = True
@@ -606,13 +610,21 @@ else:
         st.write(f" Rol: {st.session_state.profile['roles']['name']}")
         st.write(f" Tipo: {'Administrador' if st.session_state.is_admin else 'Usuario'}")
         if st.button("Cerrar Sesión"):
-            # Limpiar rastro en el navegador
+            # 1. Marcar el deseo explícito de salir
+            st.session_state.logout_requested = True
+            st.session_state.user = None
+            
+            # 2. Intentar borrar cookie por todos los medios
+            try:
+                cookie_manager.delete('user_id_persist')
+            except: pass
+            
             st.components.v1.html("""
                 <script>
                     document.cookie = "user_id_persist=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
                 </script>
             """, height=0)
-            st.session_state.user = None
+            
             if "init_gate" in st.session_state: del st.session_state.init_gate
             st.rerun()
 
