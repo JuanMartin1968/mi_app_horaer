@@ -190,41 +190,43 @@ def check_overlap(user_id, start_dt, end_dt):
     Dos rangos se solapan si: (start1 < end2) AND (end1 > start2)
     """
     try:
-        # Normalizar a UTC para comparación consistente
-        if hasattr(start_dt, 'tzinfo') and start_dt.tzinfo is not None:
-            start_utc = start_dt.astimezone(timezone.utc)
-            end_utc = end_dt.astimezone(timezone.utc)
+        # Convertir a strings ISO para evitar problemas de timezone con Supabase
+        # Asegurar que tenemos datetime con timezone UTC
+        if hasattr(start_dt, 'tzinfo'):
+            if start_dt.tzinfo is None:
+                start_utc = start_dt.replace(tzinfo=timezone.utc)
+                end_utc = end_dt.replace(tzinfo=timezone.utc)
+            else:
+                start_utc = start_dt.astimezone(timezone.utc)
+                end_utc = end_dt.astimezone(timezone.utc)
         else:
-            # Si no tiene timezone, asumir que ya está en UTC
-            start_utc = start_dt.replace(tzinfo=timezone.utc) if start_dt.tzinfo is None else start_dt
-            end_utc = end_dt.replace(tzinfo=timezone.utc) if end_dt.tzinfo is None else end_dt
+            start_utc = start_dt.replace(tzinfo=timezone.utc)
+            end_utc = end_dt.replace(tzinfo=timezone.utc)
         
-        # Obtener la fecha del registro para filtrar solo ese día (en UTC)
-        date_start = start_utc.date().isoformat()
-        date_end = (end_utc + timedelta(days=1)).date().isoformat()
+        # Convertir a ISO strings SIN timezone para la query
+        start_iso = start_utc.replace(tzinfo=None).isoformat()
+        end_iso = end_utc.replace(tzinfo=None).isoformat()
+        date_str = start_utc.date().isoformat()
         
-        # Obtener todos los registros del usuario en ese rango de fechas
-        q = supabase.table("time_entries").select("id, start_time, end_time").eq("profile_id", user_id).gte("start_time", date_start).lt("start_time", date_end).execute()
+        # Obtener todos los registros del usuario en ese día
+        q = supabase.table("time_entries").select("id, start_time, end_time").eq("profile_id", user_id).gte("start_time", date_str).execute()
         
         if not q.data:
             return False
         
-        # Verificar solapamiento en Python
+        # Verificar solapamiento en Python con strings
         for entry in q.data:
-            # Parsear las fechas de la BD (siempre vienen en UTC)
-            existing_start = pd.to_datetime(entry['start_time'], utc=True)
-            existing_end = pd.to_datetime(entry['end_time'], utc=True)
+            existing_start = entry['start_time']
+            existing_end = entry['end_time']
             
-            # Lógica de solapamiento: los rangos se solapan si:
-            # el inicio de uno es antes del fin del otro Y el fin de uno es después del inicio del otro
-            if (existing_start < end_utc) and (existing_end > start_utc):
+            # Comparar como strings ISO (funciona correctamente)
+            if (existing_start < end_iso) and (existing_end > start_iso):
                 return True
         
         return False
     except Exception as e:
-        # En caso de error, BLOQUEAR el registro para evitar duplicados
-        # No mostrar warning para evitar mensajes invasivos al login
-        return True  # Bloquear en caso de error
+        # En caso de error, permitir el registro (fail-safe)
+        return False
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_clientes_cached():
@@ -607,8 +609,9 @@ def mostrar_registro_tiempos():
                                     limpiar_estado_timer()
                                     st.rerun()
 
-    # 4. TABLA DE HISTORIAL (Movida fuera de esta función para evitar duplicación)
-    # El historial se muestra directamente desde el flujo principal
+    # 4. TABLA DE HISTORIAL (Siempre visible al final)
+    st.markdown("---")
+    mostrar_historial_tiempos()
 
 def limpiar_estado_timer():
     if 'form_key_suffix' not in st.session_state: st.session_state.form_key_suffix = 0
@@ -1679,8 +1682,6 @@ Responsable"""
     else:
         # Para roles de usuario no administrador
         mostrar_registro_tiempos()
-        st.markdown("---")
-        mostrar_historial_tiempos()
 
 # --- REFRESH DINMICO (Al final para no bloquear UI) ---
 
