@@ -440,20 +440,40 @@ def mostrar_registro_tiempos():
                                 if check_overlap(target_user_id, st_dt, end_dt):
                                     st.error("⚠️ Error: El rango de horas se cruza con un registro existente.")
                                 else:
-                                    supabase.table("time_entries").insert({
-                                        "profile_id": target_user_id, "project_id": p_id, "description": descripcion,
-                                        "start_time": st_dt.isoformat(), "end_time": end_dt.isoformat(),
-                                        "total_minutes": t_min, "is_billable": es_facturable,
-                                        "internal_note": nota_interna
-                                    }).execute()
-                                    if st.session_state.active_timer_id:
-                                        supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
-                                    limpiar_estado_timer()
-                                    st.session_state.success_msg = " Cronómetro guardado."
-                                    st.session_state.form_key_suffix += 1
-                                    st.rerun()
+                                    # 1. Intentar GUARDAR el registro
+                                    insert_ok = False
+                                    try:
+                                        payload = {
+                                            "profile_id": target_user_id, "project_id": p_id, "description": descripcion,
+                                            "start_time": st_dt.isoformat(), "end_time": end_dt.isoformat(),
+                                            "total_minutes": t_min, "is_billable": es_facturable
+                                        }
+                                        if nota_interna:
+                                            payload["internal_note"] = nota_interna
+                                        
+                                        supabase.table("time_entries").insert(payload).execute()
+                                        insert_ok = True
+                                    except Exception as e:
+                                        st.error(f" Error al guardar registro: {str(e)}")
+
+                                    # 2. Si guardó, limpiar cronómetro (con fallback)
+                                    if insert_ok:
+                                        if st.session_state.active_timer_id:
+                                            try:
+                                                supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
+                                            except Exception as e_del:
+                                                # Fallback: Intentar al menos detenerlo para que no siga contando
+                                                try:
+                                                    supabase.table("active_timers").update({"is_running": False}).eq("id", st.session_state.active_timer_id).execute()
+                                                except: pass
+                                                st.toast(f"Guardado, pero error limpiando timer: {str(e_del)}", icon="⚠️")
+                                        
+                                        limpiar_estado_timer()
+                                        st.session_state.success_msg = " Cronómetro guardado."
+                                        st.session_state.form_key_suffix += 1
+                                        st.rerun()
                             except Exception as e:
-                                st.error(f" Error al finalizar: {str(e)}")
+                                st.error(f" Error inesperado al finalizar: {str(e)}")
                 else:
                     if st.session_state.total_elapsed > 0:
                         hrs, rem = divmod(int(st.session_state.total_elapsed), 3600)
@@ -561,7 +581,11 @@ def mostrar_historial_tiempos():
         df['Proyecto'] = df['projects.name'].fillna('...')
         df['Moneda'] = df['projects.currency'].fillna('')
         df['Usuario'] = df['profiles.full_name'].fillna('...')
-        df['Nota'] = df['internal_note'].fillna('')
+        # Robust against missing column
+        if 'internal_note' in df.columns:
+            df['Nota'] = df['internal_note'].fillna('')
+        else:
+            df['Nota'] = ''
         
         if st.session_state.is_admin:
             rates_resp = supabase.table("project_rates").select("*").execute()
