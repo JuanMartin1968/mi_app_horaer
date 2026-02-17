@@ -10,7 +10,10 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from types import SimpleNamespace
 import extra_streamlit_components as xtc
-from streamlit_autorefresh import st_autorefresh
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
 
 # Importación segura de librerías opcionales
 try:
@@ -435,16 +438,12 @@ def mostrar_registro_tiempos():
                 timer_is_for_current_proj = (st.session_state.active_timer_id and st.session_state.get('active_project_id') == p_id)
 
                 if st.session_state.timer_running and timer_is_for_current_proj:
-                    # --- HEARTBEAT PULSE ---
-                    # Auto-refresh cada 50 segundos para mantener vivo y actualizar UI
-                    count = st_autorefresh(interval=50 * 1000, key="timer_pulse")
-                    
-                    # Actualizar DB 'updated_at' cada minuto aprox (usando el refresh)
-                    # Esto sirve de "latido" para verificar desconexión
-                    try:
-                        now_utc = datetime.now(timezone.utc)
-                        supabase.table("active_timers").update({"updated_at": now_utc.isoformat()}).eq("id", st.session_state.active_timer_id).execute()
-                    except: pass
+                    if st_autorefresh:
+                        count = st_autorefresh(interval=50 * 1000, key="timer_pulse")
+                        try:
+                            now_utc = datetime.now(timezone.utc)
+                            supabase.table("active_timers").update({"updated_at": now_utc.isoformat()}).eq("id", st.session_state.active_timer_id).execute()
+                        except: pass
                     # -----------------------
 
                     now_lima = get_lima_now().replace(tzinfo=None)
