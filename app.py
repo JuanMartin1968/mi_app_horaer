@@ -190,8 +190,7 @@ def check_overlap(user_id, start_dt, end_dt):
     Dos rangos se solapan si: (start1 < end2) AND (end1 > start2)
     """
     try:
-        # Convertir a strings ISO para evitar problemas de timezone con Supabase
-        # Asegurar que tenemos datetime con timezone UTC
+        # Convertir a UTC y luego a strings ISO SIN timezone
         if hasattr(start_dt, 'tzinfo'):
             if start_dt.tzinfo is None:
                 start_utc = start_dt.replace(tzinfo=timezone.utc)
@@ -203,23 +202,25 @@ def check_overlap(user_id, start_dt, end_dt):
             start_utc = start_dt.replace(tzinfo=timezone.utc)
             end_utc = end_dt.replace(tzinfo=timezone.utc)
         
-        # Convertir a ISO strings SIN timezone para la query
+        # Convertir a ISO strings SIN timezone para comparación
         start_iso = start_utc.replace(tzinfo=None).isoformat()
         end_iso = end_utc.replace(tzinfo=None).isoformat()
-        date_str = start_utc.date().isoformat()
         
-        # Obtener todos los registros del usuario en ese día
-        q = supabase.table("time_entries").select("id, start_time, end_time").eq("profile_id", user_id).gte("start_time", date_str).execute()
+        # Crear timestamp de inicio del día (00:00:00) como string ISO
+        day_start = start_utc.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None).isoformat()
+        
+        # Obtener todos los registros del usuario desde el inicio del día
+        q = supabase.table("time_entries").select("id, start_time, end_time").eq("profile_id", user_id).gte("start_time", day_start).execute()
         
         if not q.data:
             return False
         
-        # Verificar solapamiento en Python con strings
+        # Verificar solapamiento comparando strings ISO
         for entry in q.data:
             existing_start = entry['start_time']
             existing_end = entry['end_time']
             
-            # Comparar como strings ISO (funciona correctamente)
+            # Lógica de solapamiento con strings ISO
             if (existing_start < end_iso) and (existing_end > start_iso):
                 return True
         
