@@ -176,8 +176,11 @@ def login_user(email, password):
                 </script>
             """, height=0)
             
+            
             st.success(" Sesión guardada en este dispositivo.")
             time.sleep(1.0)
+            # Limpiar cualquier estado residual de cronómetros anteriores
+            limpiar_estado_timer()
             st.rerun()
     except Exception as e:
         st.error(f" Error de acceso: {str(e)}")
@@ -279,6 +282,7 @@ def mostrar_registro_tiempos():
                 # No active timer found in DB
                 st.session_state.active_timer_id = None
                 st.session_state.timer_running = False
+                st.session_state.active_timer_description = ""
             st.rerun()
         except: pass
     
@@ -422,7 +426,6 @@ def mostrar_registro_tiempos():
                             }).execute()
                             limpiar_estado_timer()
                             st.session_state.success_msg = f" Guardado con éxito ({t_inicio_str} a {t2.astimezone(tz_local).strftime('%H:%M')})."
-                            st.session_state.form_key_suffix += 1
                             st.rerun()
                 except ValueError:
                     st.error("Formato invlido. Use HH:mm (ej: 08:33)")
@@ -513,7 +516,6 @@ def mostrar_registro_tiempos():
                                         
                                         limpiar_estado_timer()
                                         st.session_state.success_msg = " Cronómetro guardado."
-                                        st.session_state.form_key_suffix += 1
                                         st.rerun()
                             except Exception as e:
                                 st.error(f" Error inesperado al finalizar: {str(e)}")
@@ -541,12 +543,15 @@ def mostrar_registro_tiempos():
                                     if st.session_state.active_timer_id:
                                         supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
                                     limpiar_estado_timer()
-                                    st.session_state.form_key_suffix += 1
                                     st.rerun()
                                 except Exception as e:
                                     st.error(f" Error al descartar: {str(e)}")
                     else:
-                        if st.button(" Iniciar Cronómetro", disabled=not (can_register and form_valido)):
+                        if st.button(" Iniciar Cronómetro", disabled=not (can_register and form_valido and is_today)):
+                            if not is_today:
+                                st.error("Solo se permite iniciar cronómetro hoy.")
+                                st.stop()
+
                             try:
                                 st.session_state.timer_start = get_lima_now().replace(tzinfo=None)
                                 st.session_state.timer_running = True
@@ -585,6 +590,8 @@ def mostrar_registro_tiempos():
     mostrar_historial_tiempos()
 
 def limpiar_estado_timer():
+    if 'form_key_suffix' not in st.session_state: st.session_state.form_key_suffix = 0
+    st.session_state.form_key_suffix += 1
     st.session_state.timer_running = False
     st.session_state.total_elapsed = 0
     st.session_state.timer_start = None
