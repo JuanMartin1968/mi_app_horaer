@@ -631,7 +631,9 @@ def mostrar_historial_tiempos():
     st.subheader(" Historial de Horas")
     query = supabase.table("time_entries").select("*, profiles(full_name, role_id, roles(name)), projects(name, currency, clients(name))").order("start_time", desc=True)
     if not st.session_state.is_admin:
-        limite_30_dias = (get_lima_now() - timedelta(days=30)).isoformat()
+        # Convertir a UTC y remover timezone para evitar errores de Supabase
+        limite_30_dias_dt = get_lima_now() - timedelta(days=30)
+        limite_30_dias = limite_30_dias_dt.astimezone(timezone.utc).replace(tzinfo=None).isoformat()
         query = query.eq("profile_id", st.session_state.user.id).gte("start_time", limite_30_dias)
     
     entries_resp = query.execute()
