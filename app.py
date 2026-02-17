@@ -1607,7 +1607,7 @@ Responsable"""
                                             if liquidation_id and liquidation_status == "draft":
                                                 if st.button(" Marcar como Enviada"):
                                                     try:
-                                                        supabase.table("liquidations").update({"status": "sent", "sent_at": get_lima_now().isoformat()}).eq("id", liquidation_id).execute()
+                                                        supabase.table("liquidations").update({"status": "sent", "sent_at": get_lima_now().astimezone(timezone.utc).replace(tzinfo=None).isoformat()}).eq("id", liquidation_id).execute()
                                                         st.success(" Marcada como Enviada")
                                                         st.rerun()
                                                     except Exception as e:
@@ -1617,7 +1617,7 @@ Responsable"""
                                             if liquidation_id and liquidation_status == "sent":
                                                 if st.button(" Marcar como Pagada"):
                                                     try:
-                                                        supabase.table("liquidations").update({"status": "paid", "paid_at": get_lima_now().isoformat()}).eq("id", liquidation_id).execute()
+                                                        supabase.table("liquidations").update({"status": "paid", "paid_at": get_lima_now().astimezone(timezone.utc).replace(tzinfo=None).isoformat()}).eq("id", liquidation_id).execute()
                                                         st.success(" Marcada como Pagada")
                                                         st.rerun()
                                                     except Exception as e:
