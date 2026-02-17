@@ -186,22 +186,40 @@ def login_user(email, password):
         st.error(f" Error de acceso: {str(e)}")
 
 def check_overlap(user_id, start_dt, end_dt):
-    # Validar que no existan registros superpuestos para el mismo usuario
-    # overlaps if (StartA < EndB) and (EndA > StartB)
+    """Validar que no existan registros superpuestos para el mismo usuario.
+    Dos rangos se solapan si: (start1 < end2) AND (end1 > start2)
+    """
     try:
-        # Convert to ISO with timezone for query
-        s_iso = start_dt.isoformat()
-        e_iso = end_dt.isoformat()
+        # Obtener la fecha del registro para filtrar solo ese día
+        date_str = start_dt.date().isoformat()
         
-        # Supabase doesn't support complex OR logic easily in one line for overlaps without range types,
-        # but we can check: start_time < end_dt AND end_time > start_dt
-        # We'll use a raw filter or just iterate (not efficient but safe for now) or better:
-        # q = supabase.table("time_entries").select("id").eq("profile_id", user_id).lt("start_time", e_iso).gt("end_time", s_iso)
-        # Verify valid logic: Existing Start must be < New End AND Existing End must be > New Start
+        # Obtener todos los registros del usuario en esa fecha
+        q = supabase.table("time_entries").select("id, start_time, end_time").eq("profile_id", user_id).gte("start_time", date_str).execute()
         
-        q = supabase.table("time_entries").select("id").eq("profile_id", user_id).lt("start_time", e_iso).gt("end_time", s_iso).execute()
-        return len(q.data) > 0
-    except:
+        if not q.data:
+            return False
+        
+        # Verificar solapamiento en Python para tener control total
+        for entry in q.data:
+            existing_start = pd.to_datetime(entry['start_time'])
+            existing_end = pd.to_datetime(entry['end_time'])
+            
+            # Convertir a timezone-aware si es necesario
+            if start_dt.tzinfo is None:
+                start_check = pd.to_datetime(start_dt)
+                end_check = pd.to_datetime(end_dt)
+            else:
+                start_check = start_dt
+                end_check = end_dt
+            
+            # Lógica de solapamiento: los rangos se solapan si:
+            # el inicio de uno es antes del fin del otro Y el fin de uno es después del inicio del otro
+            if (existing_start < end_check) and (existing_end > start_check):
+                return True
+        
+        return False
+    except Exception as e:
+        # En caso de error, permitir el registro (fail-safe)
         return False
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -698,6 +716,8 @@ if not st.session_state.user and not st.session_state.get('logout_requested'):
                 st.session_state.user = SimpleNamespace(id=u_id)
                 st.session_state.profile = profile_res.data
                 st.session_state.is_admin = profile_res.data.get('is_admin', False) or (profile_res.data.get('account_type') == "Administrador")
+                # Limpiar estado de timer al restaurar sesión
+                limpiar_estado_timer()
                 st.rerun()
         except:
             pass
