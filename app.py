@@ -190,37 +190,41 @@ def check_overlap(user_id, start_dt, end_dt):
     Dos rangos se solapan si: (start1 < end2) AND (end1 > start2)
     """
     try:
-        # Obtener la fecha del registro para filtrar solo ese día
-        date_str = start_dt.date().isoformat()
+        # Normalizar a UTC para comparación consistente
+        if hasattr(start_dt, 'tzinfo') and start_dt.tzinfo is not None:
+            start_utc = start_dt.astimezone(timezone.utc)
+            end_utc = end_dt.astimezone(timezone.utc)
+        else:
+            # Si no tiene timezone, asumir que ya está en UTC
+            start_utc = start_dt.replace(tzinfo=timezone.utc) if start_dt.tzinfo is None else start_dt
+            end_utc = end_dt.replace(tzinfo=timezone.utc) if end_dt.tzinfo is None else end_dt
         
-        # Obtener todos los registros del usuario en esa fecha
-        q = supabase.table("time_entries").select("id, start_time, end_time").eq("profile_id", user_id).gte("start_time", date_str).execute()
+        # Obtener la fecha del registro para filtrar solo ese día (en UTC)
+        date_start = start_utc.date().isoformat()
+        date_end = (end_utc + timedelta(days=1)).date().isoformat()
+        
+        # Obtener todos los registros del usuario en ese rango de fechas
+        q = supabase.table("time_entries").select("id, start_time, end_time").eq("profile_id", user_id).gte("start_time", date_start).lt("start_time", date_end).execute()
         
         if not q.data:
             return False
         
-        # Verificar solapamiento en Python para tener control total
+        # Verificar solapamiento en Python
         for entry in q.data:
-            existing_start = pd.to_datetime(entry['start_time'])
-            existing_end = pd.to_datetime(entry['end_time'])
-            
-            # Convertir a timezone-aware si es necesario
-            if start_dt.tzinfo is None:
-                start_check = pd.to_datetime(start_dt)
-                end_check = pd.to_datetime(end_dt)
-            else:
-                start_check = start_dt
-                end_check = end_dt
+            # Parsear las fechas de la BD (siempre vienen en UTC)
+            existing_start = pd.to_datetime(entry['start_time'], utc=True)
+            existing_end = pd.to_datetime(entry['end_time'], utc=True)
             
             # Lógica de solapamiento: los rangos se solapan si:
             # el inicio de uno es antes del fin del otro Y el fin de uno es después del inicio del otro
-            if (existing_start < end_check) and (existing_end > start_check):
+            if (existing_start < end_utc) and (existing_end > start_utc):
                 return True
         
         return False
     except Exception as e:
-        # En caso de error, permitir el registro (fail-safe)
-        return False
+        # En caso de error, BLOQUEAR el registro para evitar duplicados
+        st.warning(f"Error al verificar solapamiento: {e}")
+        return True  # Cambio crítico: bloquear en caso de error
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_clientes_cached():
