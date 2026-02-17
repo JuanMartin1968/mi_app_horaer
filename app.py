@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from types import SimpleNamespace
 import extra_streamlit_components as xtc
+from streamlit_autorefresh import st_autorefresh
 
 # Importación segura de librerías opcionales
 try:
@@ -233,18 +234,49 @@ def mostrar_registro_tiempos():
             timer_q = supabase.table("active_timers").select("*, projects(name, client_id, clients(name))").eq("user_id", st.session_state.user.id).execute()
             if timer_q and timer_q.data:
                 t_data = timer_q.data[0]
-                if t_data['is_running'] or t_data['total_elapsed_seconds'] > 0:
+                
+                # --- HEARTBEAT & AUTO-STOP CHECK ---
+                # Verificar si el cronómetro está "vivo" o si murió (batería, cierre inesperado)
+                should_auto_stop = False
+                last_update = pd.to_datetime(t_data.get('updated_at', t_data['created_at'])).replace(tzinfo=timezone.utc)
+                now_utc = datetime.now(timezone.utc)
+                
+                # Si pasaron más de 5 minutos desde último update, asumimos muerte súbita
+                if t_data['is_running'] and (now_utc - last_update).total_seconds() > 300:
+                    should_auto_stop = True
+                    # Calcular tiempo real hasta el corte
+                    start_utc = pd.to_datetime(t_data['start_time']).replace(tzinfo=timezone.utc)
+                    # Tiempo corrido hasta el último latido
+                    valid_elapsed = t_data['total_elapsed_seconds'] + (last_update - start_utc).total_seconds()
+                    
+                    try:
+                        supabase.table("active_timers").update({
+                            "is_running": False,
+                            "total_elapsed_seconds": int(valid_elapsed),
+                            "updated_at": now_utc.isoformat()
+                        }).eq("id", t_data['id']).execute()
+                        st.toast(f"⚠️ Cronómetro detenido automáticamente (Inactividad desde {last_update.astimezone(timezone(timedelta(hours=-5))).strftime('%H:%M')})", icon="🛑")
+                        # Actualizar estado local
+                        t_data['is_running'] = False
+                        t_data['total_elapsed_seconds'] = int(valid_elapsed)
+                    except Exception as e:
+                        st.error(f"Error auto-deteniendo cronómetro: {e}")
+
+                # Cargar en sesión
+                if st.session_state.active_timer_id != t_data['id'] or should_auto_stop:
                     st.session_state.active_timer_id = t_data['id']
-                    st.session_state.timer_running = t_data['is_running']
-                    st.session_state.timer_start = pd.to_datetime(t_data['start_time']).replace(tzinfo=None)
-                    st.session_state.total_elapsed = t_data['total_elapsed_seconds']
-                    # Sincronizar UI
                     st.session_state.active_project_id = t_data['project_id']
-                    st.session_state.active_project_name = t_data['projects']['name']
-                    st.session_state.active_client_name = t_data['projects']['clients']['name']
+                    st.session_state.timer_running = t_data['is_running']
                     st.session_state.active_timer_description = t_data.get('description', '')
                     st.session_state.active_timer_billable = t_data.get('is_billable', True)
-                    st.rerun()
+                    st.session_state.total_elapsed = t_data['total_elapsed_seconds']
+                    st.session_state.timer_start = pd.to_datetime(t_data['start_time']).replace(tzinfo=None) # Local time logic used elsewhere expects naive or handle with care
+
+            else:
+                # No active timer found in DB
+                st.session_state.active_timer_id = None
+                st.session_state.timer_running = False
+            st.rerun()
         except: pass
     
     # 1. Selección de Cliente (Siempre visible)
@@ -403,6 +435,18 @@ def mostrar_registro_tiempos():
                 timer_is_for_current_proj = (st.session_state.active_timer_id and st.session_state.get('active_project_id') == p_id)
 
                 if st.session_state.timer_running and timer_is_for_current_proj:
+                    # --- HEARTBEAT PULSE ---
+                    # Auto-refresh cada 50 segundos para mantener vivo y actualizar UI
+                    count = st_autorefresh(interval=50 * 1000, key="timer_pulse")
+                    
+                    # Actualizar DB 'updated_at' cada minuto aprox (usando el refresh)
+                    # Esto sirve de "latido" para verificar desconexión
+                    try:
+                        now_utc = datetime.now(timezone.utc)
+                        supabase.table("active_timers").update({"updated_at": now_utc.isoformat()}).eq("id", st.session_state.active_timer_id).execute()
+                    except: pass
+                    # -----------------------
+
                     now_lima = get_lima_now().replace(tzinfo=None)
                     actual_elapsed = st.session_state.total_elapsed + (now_lima - st.session_state.timer_start).total_seconds()
                     hrs, rem = divmod(int(actual_elapsed), 3600)
