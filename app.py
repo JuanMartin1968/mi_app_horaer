@@ -223,8 +223,8 @@ def check_overlap(user_id, start_dt, end_dt):
         return False
     except Exception as e:
         # En caso de error, BLOQUEAR el registro para evitar duplicados
-        st.warning(f"Error al verificar solapamiento: {e}")
-        return True  # Cambio crítico: bloquear en caso de error
+        # No mostrar warning para evitar mensajes invasivos al login
+        return True  # Bloquear en caso de error
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_clientes_cached():
@@ -607,9 +607,8 @@ def mostrar_registro_tiempos():
                                     limpiar_estado_timer()
                                     st.rerun()
 
-    # 4. TABLA DE HISTORIAL (Siempre visible al final)
-    st.markdown("---")
-    mostrar_historial_tiempos()
+    # 4. TABLA DE HISTORIAL (Movida fuera de esta función para evitar duplicación)
+    # El historial se muestra directamente desde el flujo principal
 
 def limpiar_estado_timer():
     if 'form_key_suffix' not in st.session_state: st.session_state.form_key_suffix = 0
@@ -1680,6 +1679,8 @@ Responsable"""
     else:
         # Para roles de usuario no administrador
         mostrar_registro_tiempos()
+        st.markdown("---")
+        mostrar_historial_tiempos()
 
 # --- REFRESH DINMICO (Al final para no bloquear UI) ---
 
