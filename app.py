@@ -409,51 +409,51 @@ def mostrar_registro_tiempos():
                     mins, secs = divmod(rem, 60)
                     st.metric(" EN VIVO", f"{hrs:02d}:{mins:02d}:{secs:02d}")
 
-                c_t1, c_t2, c_t3 = st.columns(3)
-                with c_t1:
-                    if st.button(" || Pausar", use_container_width=True):
-                        try:
-                            t_now = get_lima_now().replace(tzinfo=None)
-                            new_elapsed = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
-                            st.session_state.total_elapsed = new_elapsed
-                            st.session_state.timer_running = False
-                            supabase.table("active_timers").update({
-                                "is_running": False, "total_elapsed_seconds": int(new_elapsed),
-                                "description": descripcion, "is_billable": es_facturable
-                            }).eq("id", st.session_state.active_timer_id).execute()
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f" Error al pausar: {str(e)}")
-                with c_t2:
-                    if st.button(" 🔄 Sinc", use_container_width=True, help="Fuerza la actualización si el tiempo se ve estático"): st.rerun()
-                with c_t3:
-                    if st.button(" Fin", disabled=not (can_register and form_valido), use_container_width=True, type="primary"):
-                        try:
-                            t_now = get_lima_now().replace(tzinfo=None)
-                            t_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
-                            t_min = int(t_sec // 60) + (1 if t_sec % 60 > 0 else 0)
-                            tz_local = timezone(timedelta(hours=-5))
-                            t_st_loc = st.session_state.timer_start - timedelta(seconds=st.session_state.total_elapsed)
-                            st_dt = datetime.combine(fecha_sel, t_st_loc.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
-                            end_dt = st_dt + timedelta(minutes=t_min)
-                            
-                            if check_overlap(target_user_id, st_dt, end_dt):
-                                st.error("⚠️ Error: El rango de horas se cruza con un registro existente.")
-                            else:
-                                supabase.table("time_entries").insert({
-                                    "profile_id": target_user_id, "project_id": p_id, "description": descripcion,
-                                    "start_time": st_dt.isoformat(), "end_time": end_dt.isoformat(),
-                                    "total_minutes": t_min, "is_billable": es_facturable,
-                                    "internal_note": nota_interna
-                                }).execute()
-                                if st.session_state.active_timer_id:
-                                    supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
-                                limpiar_estado_timer()
-                                st.session_state.success_msg = " Cronómetro guardado."
-                                st.session_state.form_key_suffix += 1
+                    c_t1, c_t2, c_t3 = st.columns(3)
+                    with c_t1:
+                        if st.button(" || Pausar", use_container_width=True):
+                            try:
+                                t_now = get_lima_now().replace(tzinfo=None)
+                                new_elapsed = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
+                                st.session_state.total_elapsed = new_elapsed
+                                st.session_state.timer_running = False
+                                supabase.table("active_timers").update({
+                                    "is_running": False, "total_elapsed_seconds": int(new_elapsed),
+                                    "description": descripcion, "is_billable": es_facturable
+                                }).eq("id", st.session_state.active_timer_id).execute()
                                 st.rerun()
-                        except Exception as e:
-                            st.error(f" Error al finalizar: {str(e)}")
+                            except Exception as e:
+                                st.error(f" Error al pausar: {str(e)}")
+                    with c_t2:
+                        if st.button(" 🔄 Sinc", use_container_width=True, help="Fuerza la actualización si el tiempo se ve estático"): st.rerun()
+                    with c_t3:
+                        if st.button(" Fin", disabled=not (can_register and form_valido), use_container_width=True, type="primary"):
+                            try:
+                                t_now = get_lima_now().replace(tzinfo=None)
+                                t_sec = st.session_state.total_elapsed + (t_now - st.session_state.timer_start).total_seconds()
+                                t_min = int(t_sec // 60) + (1 if t_sec % 60 > 0 else 0)
+                                tz_local = timezone(timedelta(hours=-5))
+                                t_st_loc = st.session_state.timer_start - timedelta(seconds=st.session_state.total_elapsed)
+                                st_dt = datetime.combine(fecha_sel, t_st_loc.time()).replace(tzinfo=tz_local).astimezone(timezone.utc)
+                                end_dt = st_dt + timedelta(minutes=t_min)
+                                
+                                if check_overlap(target_user_id, st_dt, end_dt):
+                                    st.error("⚠️ Error: El rango de horas se cruza con un registro existente.")
+                                else:
+                                    supabase.table("time_entries").insert({
+                                        "profile_id": target_user_id, "project_id": p_id, "description": descripcion,
+                                        "start_time": st_dt.isoformat(), "end_time": end_dt.isoformat(),
+                                        "total_minutes": t_min, "is_billable": es_facturable,
+                                        "internal_note": nota_interna
+                                    }).execute()
+                                    if st.session_state.active_timer_id:
+                                        supabase.table("active_timers").delete().eq("id", st.session_state.active_timer_id).execute()
+                                    limpiar_estado_timer()
+                                    st.session_state.success_msg = " Cronómetro guardado."
+                                    st.session_state.form_key_suffix += 1
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f" Error al finalizar: {str(e)}")
                 else:
                     if st.session_state.total_elapsed > 0:
                         hrs, rem = divmod(int(st.session_state.total_elapsed), 3600)
